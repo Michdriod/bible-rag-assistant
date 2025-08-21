@@ -1,0 +1,105 @@
+body {
+    display: flex;
+    min-height: 100vh;
+    flex-direction: column;
+}
+
+#search-input {
+    border-radius: 4px 0 0 4px;
+}
+
+#search-btn {
+    border-radius: 0 4px 4px 0;
+}
+
+.verse-result {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid #eee;
+}
+
+.verse-result:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+}
+
+.verse-reference {
+    font-weight: bold;
+    color: #3273dc;
+    margin-bottom: 0.5rem;
+}
+
+.verse-text {
+    margin-left: 1rem;
+}
+
+#suggestions {
+    margin-top: 0.5rem;
+}
+
+.suggestion-tag {
+    cursor: pointer;
+    margin-bottom: 0.5rem;
+}
+
+.suggestion-tag:hover {
+    background-color: #3273dc;
+    color: white;
+}
+
+#range-info {
+    margin-top: 1.5rem;
+}
+
+.footer {
+    margin-top: auto;
+    padding: 1.5rem;
+}
+
+/* New styles for Bible version and semantic search preview */
+.preview-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.preview-card {
+    transition: all 0.2s ease;
+}
+
+.preview-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    transform: translateY(-2px);
+}
+
+.view-detail-btn {
+    cursor: pointer;
+}
+
+.verse-detail {
+    padding: 1.5rem;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    border-left: 4px solid #3273dc;
+}
+
+.verse-detail .verse-reference {
+    font-size: 1.25rem;
+}
+
+.verse-detail .verse-text {
+    font-size: 1.1rem;
+    line-height: 1.6;
+}
+
+/* Style for the Bible version selector */
+#bible-version {
+    font-weight: 600;
+}
+
+.version-badge {
+    display: inline-block;
+    margin-bottom: 1rem;
+}

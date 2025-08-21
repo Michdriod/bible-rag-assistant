@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- Define the character set and viewport settings -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <!-- Set the title of the web page -->
+    <title>Bible Verse Search</title>
+    
+    <!-- Include external CSS libraries and custom styles -->
+    <!-- Bulma CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <!-- Add a search box and Bible version selector -->
+    <section class="hero is-primary is-bold">
+        <div class="hero-body">
+            <div class="container">
+                <h1 class="title">
+                    <i class="fas fa-bible"></i> Bible Verse Search
+                </h1>
+                <p class="subtitle">
+                    Search by reference, topic, or quote
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="container">
+            <div class="columns is-centered">
+                <div class="column is-two-thirds">
+                    <!-- Bible Version Selector -->
+                    <div class="field mb-4">
+                        <label class="label">Bible Version</label>
+                        <div class="control">
+                            <div class="select is-fullwidth">
+                                <select id="bible-version">
+                                    <option value="kjv">King James Version (KJV)</option>
+                                    <option value="niv">New International Version (NIV)</option>
+                                    <option value="nkjv">New King James Version (NKJV)</option>
+                                    <option value="nlt">New Living Translation (NLT)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Search Box -->
+                    <div class="field has-addons">
+                        <div class="control is-expanded">
+                            <input id="search-input" class="input is-large" type="text" placeholder="e.g. John 3:16, verses about love, or 'For God so loved...'">
+                        </div>
+                        <div class="control">
+                            <button id="search-btn" class="button is-primary is-large">
+                                <span class="icon">
+                                    <i class="fas fa-search"></i>
+                                </span>
+                                <span>Search</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="suggestions" class="tags"></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="container">
+            <div id="results-container" class="box" style="display: none;">
+                <h2 class="title is-4" id="results-title"></h2>
+                <div id="results-content"></div>
+                <div id="range-info" class="notification is-light" style="display: none;"></div>
+            </div>
+
+            <div id="examples-container" class="box">
+                <h2 class="title is-4">Search Examples</h2>
+                <div class="content">
+                    <div class="columns">
+                        <div class="column">
+                            <h3 class="title is-5">Single Verses</h3>
+                            <ul id="single-verse-examples"></ul>
+                        </div>
+                        <div class="column">
+                            <h3 class="title is-5">Verse Ranges</h3>
+                            <ul id="range-examples"></ul>
+                        </div>
+                    </div>
+                    <div class="columns">
+                        <div class="column">
+                            <h3 class="title is-5">Topics</h3>
+                            <ul id="topic-examples"></ul>
+                        </div>
+                        <div class="column">
+                            <h3 class="title is-5">Quotes</h3>
+                            <ul id="quote-examples"></ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="content has-text-centered">
+            <p>
+                <strong>Bible Verse Search</strong> - Powered by RAG technology
+            </p>
+        </div>
+    </footer>
+
+    <!-- Axios for API calls -->
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <!-- Custom JS -->
+    <script src="/static/app.js"></script>
+</body>
+</html>

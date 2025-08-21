@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bible Presentation</title>
+  <style>
+    html,body { height:100%; margin:0; background:#111; color:#fff; }
+    .stage { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; padding:2rem; text-align:center; }
+    .reference { font-size:2.2rem; font-weight:700; margin-bottom:1rem; }
+    .verse { font-size:4rem; line-height:1.2; max-width:1200px; }
+    .controls { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); }
+    .control-btn { background:rgba(255,255,255,0.08); color:#fff; border:1px solid rgba(255,255,255,0.12); padding:0.6rem 1rem; margin:0 8px; font-size:1rem; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div id="reference" class="reference">Loading…</div>
+    <div id="verse" class="verse">&nbsp;</div>
+  </div>
+
+  <div class="controls">
+    <button id="prevBtn" class="control-btn">◀ Prev</button>
+    <button id="toggleFs" class="control-btn">⤢ Fullscreen</button>
+    <button id="nextBtn" class="control-btn">Next ▶</button>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <script src="/static/presentation.js"></script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+/* Define styles for the body and layout */
+body {
+    display: flex;
+    min-height: 100vh;
+    flex-direction: column;
+}
+
+/* Style the search input and button */
+#search-input {
+    border-radius: 4px 0 0 4px;
+}
+
+#search-btn {
+    border-radius: 0 4px 4px 0;
+}
+
+/* Add styles for verse results and suggestions */
+.verse-result {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid #eee;
+}
+
+.verse-result:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+}
+
+.verse-reference {
+    font-weight: bold;
+    color: #3273dc;
+    margin-bottom: 0.5rem;
+}
+
+.verse-text {
+    margin-left: 1rem;
+}
+
+#suggestions {
+    margin-top: 0.5rem;
+}
+
+.suggestion-tag {
+    cursor: pointer;
+    margin-bottom: 0.5rem;
+}
+
+.suggestion-tag:hover {
+    background-color: #3273dc;
+    color: white;
+}
+
+#range-info {
+    margin-top: 1.5rem;
+}
+
+.footer {
+    margin-top: auto;
+    padding: 1.5rem;
+}
