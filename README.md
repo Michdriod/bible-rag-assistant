@@ -26,50 +26,118 @@ A Retrieval-Augmented Generation (RAG) system for Bible verses with support for 
 
    ```bash
    DATABASE_URL=postgresql+asyncpg://username:password@localhost:5432/bible_rag
-   GROQ_API_KEY=your_groq_api_key
-   ```
-4. Generate embeddings for Bible verses (see below)
+   # Bible RAG Agent System
 
-## Generating Embeddings
+   A small Retrieval-Augmented Generation (RAG) system for searching Bible verses. Designed to work with a PostgreSQL database (with pgvector) and a lightweight FastAPI frontend for live presentation use.
 
-If your Bible data is already in the database, you can generate embeddings using:
+   ## Highlights
 
-```bash
-# Simple CLI interface
-python embed.py
+   - Exact and range lookups (e.g. `John 3:16`, `Matthew 5:3-12`)
+   - Semantic search via vector embeddings
+   - Multiple versions supported: `kjv`, `niv`, `nkjv`, `nlt`
+   - Deterministic structured AI output (no LLM network calls by default)
+   - Presentation mode for full-screen projector display with keyboard navigation
 
-# OR command line options
-python -m utils.generate_embeddings --version kjv  # Generate for KJV only
-python -m utils.generate_embeddings               # Generate for all versions
-python -m utils.generate_embeddings --force       # Regenerate all embeddings
-```
+   ## Quick start
 
-## Usage
+   Requirements
+   - Python 3.10+ (3.12 tested in this workspace)
+   - PostgreSQL with `pgvector` extension
+   - A Python virtualenv (recommended)
 
-### Web Interface
-
-1. Start the web server:
+   Install
 
    ```bash
+   # from project root
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install -r requiremnets.txt
+   ```
+
+   Environment
+
+   Create a `.env` file in the project root with at least your database URL:
+
+   ```
+   DATABASE_URL=postgresql+asyncpg://<user>:<pass>@localhost:5432/<db>
+   ```
+
+   Run the app (development)
+
+   ```bash
+   export DEBUG=true      # optional, enables extra logs
    uvicorn app.main:app --reload
    ```
-2. Open [http://localhost:8000](http://localhost:8000) in your browser
-3. Use the search box to query Bible verses
 
-### CLI Interface
+   Open the UI: http://127.0.0.1:8000
 
-```bash
-python cli.py "John 3:16"        # Lookup by reference
-python cli.py "verses about love" # Search by topic
-```
+   ## Embeddings
 
-## Multiple Bible Versions
+   If your Bible text is already in the database, generate embeddings without re-ingesting:
 
-The system supports the following Bible versions:
+   ```bash
+   # interactive script
+   python embed.py
 
-- KJV (King James Version)
-- NIV (New International Version)
-- NKJV (New King James Version)
-- NLT (New Living Translation)
+   # or use the generator script for specific versions
+   python -m utils.generate_embeddings --version kjv
+   python -m utils.generate_embeddings   # all versions
+   python -m utils.generate_embeddings --force  # regenerate
+   ```
 
-Select your preferred version from the dropdown menu in the web interface or specify it in the CLI.
+   Notes
+   - The generator uses a `WHERE embedding IS NULL LIMIT <batch>` loop (no OFFSET) so it won't re-process already-embedded rows.
+   - The code stores vectors in a pgvector-compatible form. Ensure `pgvector` is installed in your DB.
+
+   ## Presentation mode
+
+   Open the presentation page in a separate window (projector) to display a single verse in large font and navigate with keyboard arrows or the on-screen buttons:
+
+   ```
+   http://127.0.0.1:8000/static/presentation.html?reference=John%203:16&version=kjv
+   ```
+
+   You can also open a verse from the main UI using the Presentation button on the verse detail view.
+
+   ## Cache-busting (development)
+
+   Browsers aggressively cache static assets. During development the app now injects a timestamp query parameter to ensure fresh `app.js` is fetched on each load. If you still see stale UI:
+
+   - Hard-reload (Shift+Cmd+R on mac)
+   - Open DevTools → Network → check "Disable cache" and reload
+   - Or use an Incognito window
+
+   ## Tests
+
+   Basic integration tests are included in `tests/`. They require `pytest` and `httpx`:
+
+   ```bash
+   pip install pytest httpx
+   pytest -q
+   ```
+
+   ## Troubleshooting
+
+   resource_tracker warning on shutdown
+
+   If you see a warning like:
+
+   ```
+   resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown
+   ```
+
+   It usually means a multiprocessing/executor/manager wasn't shut down before process exit. Fixes:
+
+   - Run without `--reload` to see if the dev reloader caused it.
+   - Make sure any `ProcessPoolExecutor`, `multiprocessing.Manager`, or `Pool` you create is `.shutdown()`/`.close()`/`.join()` in an `@app.on_event('shutdown')` handler.
+
+   This project includes defensive shutdown cleanup in `app/main.py` to attempt to close common executors/managers and terminate stray child processes on shutdown.
+
+   ## Deployment notes
+
+   - Use a proper process manager (systemd, docker, or a cloud service) in production and avoid uvicorn `--reload` there.
+   - Consider fingerprinting static assets in production instead of timestamp query strings.
+
+   ## Want changes?
+
+   Tell me whether you prefer a single-file frontend (merge presentation into `app.js`) or keep separate pages (current). I can switch either way and adapt cache-busting/fingerprinting accordingly.

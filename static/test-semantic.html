@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Semantic Search Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .test-form {
+            margin-bottom: 20px;
+        }
+        .test-form input, .test-form select, .test-form button {
+            padding: 8px 12px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .test-form button {
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        .test-form button:hover {
+            background: #0056b3;
+        }
+        .results {
+            margin-top: 20px;
+        }
+        .result-item {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 10px 0;
+            background: #f9f9f9;
+        }
+        .reference {
+            font-weight: bold;
+            color: #007bff;
+            margin-bottom: 5px;
+        }
+        .text {
+            margin-bottom: 5px;
+        }
+        .similarity {
+            font-size: 0.9em;
+            color: #666;
+        }
+        .error {
+            color: red;
+            background: #ffe6e6;
+            padding: 10px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Bible Semantic Search Test</h1>
+        
+        <div class="test-form">
+            <input type="text" id="searchQuery" placeholder="Enter search text (e.g., 'love your enemies')" style="width: 300px;">
+            <select id="version">
+                <option value="kjv">KJV</option>
+                <option value="niv">NIV</option>
+                <option value="nkjv">NKJV</option>
+                <option value="nlt">NLT</option>
+            </select>
+            <select id="limit">
+                <option value="3">3 results</option>
+                <option value="5">5 results</option>
+                <option value="10">10 results</option>
+            </select>
+            <button onclick="testSemantic()">Search Semantically</button>
+            <button onclick="testReference()">Test Reference</button>
+        </div>
+        
+        <div id="results" class="results"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script>
+        async function testSemantic() {
+            const query = document.getElementById('searchQuery').value;
+            const version = document.getElementById('version').value;
+            const limit = document.getElementById('limit').value;
+            const resultsDiv = document.getElementById('results');
+            
+            if (!query.trim()) {
+                resultsDiv.innerHTML = '<div class="error">Please enter a search query</div>';
+                return;
+            }
+            
+            resultsDiv.innerHTML = '<div>Searching...</div>';
+            
+            try {
+                const response = await axios.post(`/api/bible/semantic?query=${encodeURIComponent(query)}&version=${version}&limit=${limit}`);
+                
+                if (response.data.found && response.data.results.length > 0) {
+                    let html = `<h3>Found ${response.data.results.length} results for "${query}":</h3>`;
+                    
+                    response.data.results.forEach((result, index) => {
+                        html += `
+                            <div class="result-item">
+                                <div class="reference">${index + 1}. ${result.reference}</div>
+                                <div class="text">${result.text}</div>
+                                <div class="similarity">Similarity: ${(result.similarity_score * 100).toFixed(1)}%</div>
+                            </div>
+                        `;
+                    });
+                    
+                    resultsDiv.innerHTML = html;
+                } else {
+                    resultsDiv.innerHTML = `<div class="error">No results found for "${query}"</div>`;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                resultsDiv.innerHTML = `<div class="error">Error: ${error.response?.data?.detail || error.message}</div>`;
+            }
+        }
+        
+        async function testReference() {
+            const query = document.getElementById('searchQuery').value || 'John 3:16';
+            const version = document.getElementById('version').value;
+            const resultsDiv = document.getElementById('results');
+            
+            resultsDiv.innerHTML = '<div>Testing reference search...</div>';
+            
+            try {
+                const response = await axios.post('/api/bible/search', {
+                    query: query,
+                    version: version
+                });
+                
+                if (response.data.found) {
+                    let html = `<h3>Reference search result for "${query}":</h3>`;
+                    html += `<div class="result-item">
+                        <div class="reference">${response.data.results[0].reference}</div>
+                        <div class="text">${response.data.results[0].text}</div>
+                    </div>`;
+                    resultsDiv.innerHTML = html;
+                } else {
+                    resultsDiv.innerHTML = `<div class="error">Reference not found: "${query}"</div>`;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                resultsDiv.innerHTML = `<div class="error">Error: ${error.response?.data?.detail || error.message}</div>`;
+            }
+        }
+        
+        // Test on page load
+        document.getElementById('searchQuery').value = 'love your enemies';
+    </script>
+</body>
+</html>

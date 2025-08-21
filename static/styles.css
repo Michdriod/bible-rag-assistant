@@ -103,3 +103,146 @@ body {
     display: inline-block;
     margin-bottom: 1rem;
 }
+
+/* Projector / Presentation styles */
+.projector-stage {
+    /* CSS variables allow easy tuning of typography and colors */
+    --bg-color: #0b0f1a; /* near-black for high contrast */
+    --verse-color: #ffffff;
+    --reference-color: #ffffff;
+    --meta-color: #d1d9ff;
+    --controls-bg: rgba(255,255,255,0.08);
+    --controls-border: rgba(255,255,255,0.12);
+
+    --verse-font-size: 3.2rem;
+    --reference-font-size: 1.6rem;
+    --meta-font-size: 1.2rem;
+    --verse-line-height: 1.08;
+    --verse-max-width: 1600px;
+    --verse-letter-spacing: 0px;
+
+    background: var(--bg-color);
+    color: var(--verse-color);
+    padding: 3rem 4rem;
+    max-width: 1400px;
+    margin: 0 auto;
+    border-radius: 0.5rem;
+    box-shadow: none;
+}
+
+.projector-stage .control-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+}
+
+.projector-stage .control-row .select select,
+.projector-stage .control-row input[type="text"],
+.projector-stage .control-row .button {
+    font-size: 1.2rem;
+    padding: 0.6rem 1rem;
+}
+
+.projector-stage .control-row input[type="text"] {
+    background: rgba(255,255,255,0.06);
+    color: var(--verse-color);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 0.5rem;
+}
+
+.projector-stage .control-row .select select {
+    background: rgba(255,255,255,0.04);
+    color: var(--verse-color);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 0.5rem;
+}
+
+.projector-stage .verse-text {
+    font-size: var(--verse-font-size);
+    line-height: var(--verse-line-height);
+    font-weight: 400;
+    text-align: center;
+    margin-bottom: 1.5rem;
+    max-width: var(--verse-max-width);
+    color: var(--verse-color);
+    letter-spacing: var(--verse-letter-spacing);
+    transition: font-size 120ms ease, letter-spacing 120ms ease, max-width 160ms ease;
+}
+
+.projector-stage .reference {
+    font-size: var(--reference-font-size);
+    font-weight: 600;
+    text-align: center;
+    opacity: 0.95;
+    margin-bottom: 0.5rem;
+    color: var(--reference-color);
+}
+
+.projector-stage .ai-structured {
+    font-size: var(--meta-font-size);
+    color: var(--meta-color);
+    text-align: center;
+}
+
+/* Fullscreen helper */
+.fullscreen {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100% !important;
+    height: 100% !important;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Controls (prev/next) large buttons */
+.controls {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 1rem;
+}
+.controls button {
+    background: var(--controls-bg);
+    color: var(--verse-color);
+    border: 1px solid var(--controls-border);
+    padding: 0.8rem 1.4rem;
+    font-size: 1.4rem;
+    border-radius: 0.6rem;
+}
+.controls button:hover { background: rgba(255,255,255,0.12); }
+
+/* Small-screen adjustments keep readability but slightly reduce sizes */
+@media (max-width: 800px) {
+    .projector-stage .verse-text { font-size: calc(var(--verse-font-size) / 1.8); }
+    .projector-stage .reference { font-size: calc(var(--reference-font-size) / 1.6); }
+}
+
+/* Theme overrides: apply a class on .projector-stage to change palette quickly */
+.projector-stage.theme-warm {
+    --bg-color: #121216; /* very dark neutral */
+    --verse-color: #fffaf0; /* warm off-white */
+    --reference-color: #ffe9b8;
+    --meta-color: #e6e2d9;
+    --controls-bg: rgba(255,250,240,0.06);
+    --controls-border: rgba(255,250,240,0.12);
+}
+
+.projector-stage.theme-white {
+    --bg-color: #0b0f1a;
+    --verse-color: #ffffff; /* pure white */
+    --reference-color: #ffffff;
+    --meta-color: #d1d9ff;
+    --controls-bg: rgba(255,255,255,0.08);
+    --controls-border: rgba(255,255,255,0.12);
+}
+
+/* Example quick tuning utility classes */
+.projector-stage.size-large { --verse-font-size: 4.7rem; --reference-font-size: 2.5rem; }
+.projector-stage.size-medium { --verse-font-size: 3.7rem; --reference-font-size: 1.9rem; }
+.projector-stage.size-small { --verse-font-size: 2.7rem; --reference-font-size: 1.3rem; }

@@ -71,11 +71,11 @@ class BibleRetrieverAgent:
     
     async def exact_reference_lookup(self, session: AsyncSession, reference: str, version: str = "kjv") -> List[Any]:
         """
-        Look up Bible verse(s) by exact reference - supports both single verses and ranges
+        Look up Bible verse(s) by exact reference - supports single verses, ranges, and chapters
         
         Args:
             session: Database session
-            reference: Bible reference (e.g., "John 3:16", "Genesis 1:1-3")
+            reference: Bible reference (e.g., "John 3:16", "Genesis 1:1-3", "Genesis 12")
             version: Bible version to use (e.g., "kjv", "niv", "nkjv", "nlt")
             
         Returns:
@@ -85,8 +85,11 @@ class BibleRetrieverAgent:
             # Get the appropriate model class for the requested version
             from db.models import get_verse_model
             
-            # Check if this is a range reference first
-            if self.chunker.is_range_reference(reference):
+            # Check if this is a chapter-only reference first
+            if self.chunker.is_chapter_reference(reference):
+                return await self._lookup_entire_chapter(session, reference, version)
+            # Check if this is a range reference
+            elif self.chunker.is_range_reference(reference):
                 return await self._lookup_verse_range(session, reference, version)
             else:
                 # Single verse lookup
@@ -117,7 +120,33 @@ class BibleRetrieverAgent:
         except Exception as e:
             logger.error("Error in single verse lookup: %s", str(e))
             return None
-    
+
+    async def _lookup_entire_chapter(self, session: AsyncSession, reference: str, version: str = "kjv") -> List[Any]:
+        """Look up an entire chapter by reference like 'Genesis 12'"""
+        try:
+            # Get the appropriate model class for the requested version
+            from db.models import get_verse_model
+            VerseModel = get_verse_model(version)
+            
+            # Parse the chapter reference
+            book, chapter = self.chunker.parse_chapter_reference(reference)
+            
+            # Query all verses in the chapter
+            query = select(VerseModel).where(
+                VerseModel.book == book,
+                VerseModel.chapter == chapter
+            ).order_by(VerseModel.verse)
+            
+            result = await session.execute(query)
+            verses = result.scalars().all()
+            
+            logger.info(f"Found {len(verses)} verses for {book} chapter {chapter}")
+            return list(verses)
+            
+        except Exception as e:
+            logger.error("Error in chapter lookup: %s", str(e))
+            return []
+
     async def _lookup_verse_range(self, session: AsyncSession, reference: str, version: str = "kjv") -> List[Any]:
         """Look up a range of verses (e.g., Genesis 1:1-3)"""
         try:
@@ -373,23 +402,24 @@ class BibleRetrieverAgent:
             query_embedding = await self.embedding_service.encode_text(query_text)
             embedding_list = query_embedding.tolist()
             
-            # Use pgvector cosine similarity search WITH similarity scores
-            # Cast the parameter to pgvector on the SQL side to ensure proper type handling
+            # Use a parameterized query with pgvector
+            # Convert to a formatted string that pgvector can understand
+            embedding_str = '[' + ','.join(map(str, embedding_list)) + ']'
+            
+            # Use a safer approach with text() and proper parameter binding
             sql_query = text(f"""
                 SELECT book_id, book, chapter, verse, text, reference,
-                       1 - (embedding <=> :query_embedding::vector) AS similarity_score
+                       1 - (embedding <=> :embedding_vector) AS similarity_score
                 FROM {version}
-                WHERE 1 - (embedding <=> :query_embedding::vector) >= :threshold
-                ORDER BY embedding <=> :query_embedding::vector
+                WHERE 1 - (embedding <=> :embedding_vector) >= :threshold
+                ORDER BY embedding <=> :embedding_vector
                 LIMIT :limit
             """)
             
-            # Serialize embedding to JSON array string (e.g. [0.1,0.2,...]) so it can be cast to vector
-            emb_param = json.dumps(embedding_list)
             result = await session.execute(
                 sql_query,
                 {
-                    "query_embedding": emb_param,
+                    "embedding_vector": embedding_str,
                     "threshold": float(self.MIN_SEMANTIC_SIMILARITY),  # ensure float
                     "limit": int(limit)
                 }

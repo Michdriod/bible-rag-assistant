@@ -1,417 +1,713 @@
-document.addEventListener('DOMContentLoaded', function() {
-    const searchInput = document.getElementById('search-input');
-    const searchBtn = document.getElementById('search-btn');
-    const suggestionsContainer = document.getElementById('suggestions');
-    const resultsContainer = document.getElementById('results-container');
-    const resultsTitle = document.getElementById('results-title');
-    const resultsContent = document.getElementById('results-content');
-    const rangeInfoContainer = document.getElementById('range-info');
-    
-    // Load examples
-    loadExamples();
-    
-    // Search when button is clicked or Enter is pressed
-    searchBtn.addEventListener('click', performSearch);
-    searchInput.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') {
-            performSearch();
-        }
-    });
-    
-    // Get suggestions as user types
-    searchInput.addEventListener('input', function() {
-        const query = searchInput.value.trim();
-        if (query.length > 0) {
-            getSuggestions(query);
+// [app.js] loaded - debug marker
+console.log('[app.js] loaded', new Date().toISOString());
+
+const api = axios.create({ baseURL: '/api' });
+
+let currentReference = null;
+let lastQuery = null;
+
+function updateSyncStatus(ok, msg) {
+  const el = document.getElementById('syncStatus');
+  if (!el) return;
+  el.textContent = msg || (ok ? 'online' : 'offline');
+  el.classList.toggle('online', ok);
+  el.classList.toggle('offline', !ok);
+}
+
+function clearVerseContainer() {
+  const verseEl = document.getElementById('verse');
+  verseEl.innerHTML = '';
+}
+
+function renderPagedVerses(verses, perPage) {
+  const verseEl = document.getElementById('verse');
+  clearVerseContainer();
+
+  const total = verses.length;
+  const pages = Math.max(1, Math.ceil(total / perPage));
+
+  for (let p = 0; p < pages; p++) {
+    const pageDiv = document.createElement('div');
+    pageDiv.className = 'verse-page';
+    pageDiv.dataset.page = p + 1;
+
+    const start = p * perPage;
+    const end = Math.min(start + perPage, total);
+
+    const fragment = document.createDocumentFragment();
+    for (let i = start; i < end; i++) {
+      const v = verses[i];
+      const pEl = document.createElement('p');
+      pEl.style.margin = '0.6rem 0';
+      pEl.innerHTML = `<strong>${v.verse}.</strong> ${v.text}`;
+      fragment.appendChild(pEl);
+    }
+    pageDiv.appendChild(fragment);
+    verseEl.appendChild(pageDiv);
+  }
+
+  // add pagination controls
+  const controls = document.createElement('div');
+  controls.className = 'verse-pagination-controls';
+  // leave extra bottom margin so these controls don't sit behind the fixed bottom bar
+  controls.style.marginBottom = '2rem';
+
+  const prevBtn = document.createElement('button');
+  prevBtn.textContent = 'Prev page';
+  const nextBtn = document.createElement('button');
+  nextBtn.textContent = 'Next page';
+  const pageLabel = document.createElement('span');
+  pageLabel.style.opacity = '0.9';
+
+  controls.appendChild(prevBtn);
+  controls.appendChild(pageLabel);
+  controls.appendChild(nextBtn);
+  verseEl.appendChild(controls);
+
+  let current = 1;
+  function showPage(n) {
+    const pagesEls = verseEl.querySelectorAll('.verse-page');
+    pagesEls.forEach(el => el.classList.toggle('active', Number(el.dataset.page) === n));
+    pageLabel.textContent = `Page ${n} / ${pages}`;
+    current = n;
+  }
+
+  prevBtn.addEventListener('click', () => showPage(Math.max(1, current - 1)));
+  nextBtn.addEventListener('click', () => showPage(Math.min(pages, current + 1)));
+
+  showPage(1);
+}
+
+async function loadRef(ref, version) {
+  if (!ref) return;
+  
+  const searchMode = document.getElementById('search-mode').value;
+  
+  if (searchMode === 'semantic') {
+    await loadSemanticSearch(ref, version);
+  } else {
+    await loadReferenceSearch(ref, version);
+  }
+}
+
+// Global variables for smart chunking
+let originalPassage = null; // Store the full passage info
+let currentChunk = 0; // Current chunk index
+let chunkSize = 3; // Default chunk size
+
+async function loadReferenceSearch(ref, version) {
+  lastQuery = { query: ref, version };
+  try {
+    const res = await api.post('/bible/search', lastQuery);
+    console.log('[loadReferenceSearch] response', res.data);
+    if (!res.data || !res.data.results || res.data.results.length === 0) {
+      document.getElementById('reference').textContent = ref;
+      document.getElementById('verse').innerHTML = '<em>Not found</em>';
+      updateSyncStatus(false, 'not found');
+      return;
+    }
+
+    // Normalize response: some endpoints return an array of individual verse objects
+    // while others return a single result with a .verses array. Handle both.
+    const rawResults = res.data.results || [];
+    // Build a consistent `verses` array of objects { verse, text, book, chapter }
+    let verses = [];
+    let refInfo = { book: null, chapter: null };
+
+    if (rawResults.length > 0 && rawResults[0].verse !== undefined) {
+      // Each element is a single verse entry
+      verses = rawResults.map(r => ({ verse: r.verse, text: r.text, book: r.book || null, chapter: r.chapter || null, reference: r.reference }));
+      refInfo.book = rawResults[0].book || (rawResults[0].reference ? rawResults[0].reference.split(' ')[0] : null);
+      refInfo.chapter = rawResults[0].chapter || null;
+    } else if (res.data.ai_response_structured && res.data.ai_response_structured.verses) {
+      // Fallback to structured AI response
+      const structured = res.data.ai_response_structured.verses;
+      verses = structured.map(v => {
+        const m = (v.reference || '').match(/:(\d+)$/);
+        return { verse: m ? Number(m[1]) : null, text: v.text, reference: v.reference };
+      });
+      // Try to parse book/chapter from first reference
+      if (verses.length > 0 && verses[0].reference) {
+        const refParts = verses[0].reference.split(':')[0].split(' ');
+        refInfo.chapter = Number(refParts[refParts.length - 1]) || null;
+        refInfo.book = refParts.slice(0, -1).join(' ');
+      }
+    } else if (rawResults.length > 0 && rawResults[0].verses) {
+      // Older shape: single result with a .verses array
+      verses = rawResults[0].verses.map(v => ({ verse: v.verse, text: v.text }));
+      refInfo.book = rawResults[0].reference?.book || null;
+      refInfo.chapter = rawResults[0].reference?.chapter || null;
+    }
+
+    // Compute a canonical display reference when verses are available
+    let displayRef = null;
+    if (verses && verses.length > 0) {
+      const book = refInfo.book || (res.data.results && res.data.results[0] && res.data.results[0].book) || null;
+      const chapter = refInfo.chapter || (res.data.results && res.data.results[0] && res.data.results[0].chapter) || null;
+      if (book && chapter) {
+        if (verses.length === 1) {
+          displayRef = `${book} ${chapter}:${verses[0].verse}`;
         } else {
-            suggestionsContainer.innerHTML = '';
+          displayRef = `${book} ${chapter}:${verses[0].verse}-${verses[verses.length-1].verse}`;
         }
+      }
+    }
+
+    // Fallbacks if we couldn't build a canonical ref
+    if (!displayRef) {
+      displayRef = (res.data.results && res.data.results[0] && (res.data.results[0].reference?.compact || res.data.results[0].reference?.display)) || res.data.ai_response_structured?.query || ref;
+    }
+    document.getElementById('reference').textContent = displayRef;
+
+    const perPageSelect = document.getElementById('verses-per-page');
+    // default/fallback to 4 verses per page to keep presentation lean
+    let perPage = 4;
+    try {
+      const v = perPageSelect ? Number(perPageSelect.value) : NaN;
+      if (Number.isInteger(v) && v > 0) perPage = v;
+    } catch (e) {}
+
+    if (verses && verses.length > 1) {
+      // Check if this is a range that needs smart chunking (any range with more than 3 verses)
+      if (verses.length > 3) {
+        // Initialize smart chunking for ranges with 4+ verses
+        originalPassage = {
+          book: refInfo.book || (res.data.results && res.data.results[0] && res.data.results[0].book) || null,
+          chapter: refInfo.chapter || (res.data.results && res.data.results[0] && res.data.results[0].chapter) || null,
+          verses: verses,
+          startVerse: verses[0].verse,
+          endVerse: verses[verses.length - 1].verse,
+          isRange: true
+        };
+        currentChunk = 0;
+
+        // Display first chunk
+        displayCurrentChunk();
+        console.log(`[loadReferenceSearch] Range detected: ${verses.length} verses, using smart chunking`);
+      } else {
+        // For shorter ranges (2-3 verses), use existing logic
+        originalPassage = null;
+        const lastVerse = verses[verses.length - 1];
+        currentReference = `${refInfo.book || (res.data.results && res.data.results[0] && res.data.results[0].book) || ''} ${refInfo.chapter || (res.data.results && res.data.results[0] && res.data.results[0].chapter) || ''}:${lastVerse.verse}`;
+
+  const verseEl = document.getElementById('verse');
+  verseEl.innerHTML = '';
+  // Render verses only — the canonical reference is shown in the top `#reference` element
+  renderPagedVerses(verses, perPage);
+        verseEl.classList.add('multi-verse');
+
+        console.log(`[loadReferenceSearch] Short range: Set currentReference to last verse: ${currentReference}`);
+      }
+    } else {
+      // For single verses, use the original reference
+      originalPassage = null;
+      // If the API returned a single-verse object, use that. Otherwise fall back to r.reference or input
+      if (rawResults.length === 1 && rawResults[0].reference) {
+        currentReference = rawResults[0].reference;
+        const verseEl = document.getElementById('verse');
+        verseEl.classList.remove('multi-verse');
+        verseEl.textContent = rawResults[0].text || '';
+      } else if (res.data.results && res.data.results[0] && res.data.results[0].text) {
+        currentReference = res.data.results[0].reference || ref;
+        const verseEl = document.getElementById('verse');
+        verseEl.classList.remove('multi-verse');
+        verseEl.textContent = res.data.results[0].text || '';
+      } else {
+        currentReference = ref;
+        const verseEl = document.getElementById('verse');
+        verseEl.classList.remove('multi-verse');
+        verseEl.textContent = '';
+      }
+      const verseEl = document.getElementById('verse');
+      
+    }
+
+    updateSyncStatus(true, 'synced');
+  } catch (err) {
+    console.error('[loadRef] error', err);
+    updateSyncStatus(false, 'error');
+  }
+}
+
+function displayCurrentChunk() {
+  if (!originalPassage) return;
+  
+  const startIdx = currentChunk * chunkSize;
+  const endIdx = Math.min(startIdx + chunkSize, originalPassage.verses.length);
+  const chunkVerses = originalPassage.verses.slice(startIdx, endIdx);
+  
+  if (chunkVerses.length === 0) return;
+  
+  // Set current reference to the last verse in this chunk
+  const lastVerseInChunk = chunkVerses[chunkVerses.length - 1];
+  currentReference = `${originalPassage.book} ${originalPassage.chapter}:${lastVerseInChunk.verse}`;
+  
+  // Update display
+  const verseEl = document.getElementById('verse');
+  verseEl.innerHTML = '';
+  verseEl.classList.add('multi-verse');
+  
+  // Display the chunk verses
+  const container = document.createElement('div');
+  container.style.marginTop = '1rem';
+  
+  chunkVerses.forEach((verse, index) => {
+    const verseDiv = document.createElement('div');
+    verseDiv.style.margin = '0.8rem 0';
+    verseDiv.style.lineHeight = '1.6';
+    verseDiv.innerHTML = `<strong>${verse.verse}.</strong> ${verse.text}`;
+    container.appendChild(verseDiv);
+  });
+  
+  verseEl.appendChild(container);
+  
+    console.log(`[displayCurrentChunk] Showing chunk ${currentChunk + 1}/${Math.ceil(originalPassage.verses.length / chunkSize)}`);
+}
+
+async function loadSemanticSearch(query, version) {
+  console.log('[semantic] Starting search for:', query);
+  
+  // Show loading state
+  document.getElementById('reference').textContent = 'Searching...';
+  document.getElementById('verse').innerHTML = '<em>Searching for similar verses...</em>';
+  
+  try {
+    // Make direct API call - no complexity
+    const response = await fetch(`/api/bible/semantic?query=${encodeURIComponent(query)}&version=${version}&limit=3`, {
+      method: 'POST'
     });
     
-    // Perform search for the given query
-    async function performSearch() {
-        const query = searchInput.value.trim();
-        if (!query) return;
-        
-        // Get the selected Bible version
-        const version = document.getElementById('bible-version').value;
-        
-        try {
-            const response = await axios.post('/api/bible/search', {
-                query: query,
-                version: version,
-                include_context: false
-            });
-            
-            displayResults(response.data);
-        } catch (error) {
-            console.error('Search error:', error);
-            showError('Failed to perform search. Please try again.');
-        }
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
     }
     
-    // Get search suggestions for the given query
-    async function getSuggestions(query) {
-        try {
-            const response = await axios.get('/api/bible/suggestions', {
-                params: { q: query }
-            });
-            
-            displaySuggestions(response.data.suggestions);
-        } catch (error) {
-            console.error('Suggestions error:', error);
-            suggestionsContainer.innerHTML = '';
-        }
+    const data = await response.json();
+    console.log('[semantic] Response:', data);
+    
+    // Simple check - if we have results, show them
+    if (data && data.found && data.results && data.results.length > 0) {
+      console.log('[semantic] Displaying', data.results.length, 'results');
+      displaySemanticResults(data.results, query);
+    } else {
+      console.log('[semantic] No results found');
+      document.getElementById('reference').textContent = 'Semantic Search';
+      document.getElementById('verse').innerHTML = '<em>No similar verses found</em>';
     }
     
-    // Display the list of suggestions
-    function displaySuggestions(suggestions) {
-        suggestionsContainer.innerHTML = '';
-        
-        suggestions.forEach(suggestion => {
-            const tag = document.createElement('span');
-            tag.className = 'tag is-info is-medium suggestion-tag';
-            tag.textContent = suggestion;
-            tag.addEventListener('click', function() {
-                searchInput.value = suggestion;
-                performSearch();
-            });
-            suggestionsContainer.appendChild(tag);
-        });
-    }
-    
-    // Display the search results
-    function displayResults(data) {
-        resultsContainer.style.display = 'block';
-        resultsTitle.textContent = data.message;
-        resultsContent.innerHTML = '';
-        rangeInfoContainer.style.display = 'none';
-            // Display structured AI response if available
-            if (data.ai_response_structured) {
-                const s = data.ai_response_structured;
-                const aiDiv = document.createElement('div');
-                aiDiv.className = 'notification is-light mt-4';
-                let html = '';
-                if (s.type === 'single') {
-                    html += `<p class="title is-5">📖 ${s.query}</p>`;
-                    if (s.verses && s.verses.length > 0) {
-                        html += `<p>${s.verses[0].text}</p>`;
-                    }
-                } else if (s.type === 'range' || s.type === 'semantic') {
-                    html += `<p class="title is-5">📖 ${s.query}</p>`;
-                    s.verses.forEach(v => {
-                        html += `<p><strong>${v.reference}</strong> ${v.text}</p>`;
-                    });
-                } else {
-                    html += `<pre>${JSON.stringify(s, null, 2)}</pre>`;
-                }
-                aiDiv.innerHTML = html;
-                resultsContent.appendChild(aiDiv);
-            }
+  } catch (error) {
+    console.error('[semantic] Error:', error);
+    document.getElementById('reference').textContent = 'Semantic Search';
+    document.getElementById('verse').innerHTML = '<em>Search error</em>';
+  }
+}
 
-            // version badge for results
-            const versionBadge = document.createElement('div');
-            versionBadge.className = 'tags has-addons mb-3';
+function displaySemanticResults(results, query) {
+  document.getElementById('reference').textContent = `Semantic Search: "${query}"`;
+  
+  const verseEl = document.getElementById('verse');
+  verseEl.innerHTML = '';
+  verseEl.classList.remove('multi-verse');
+  
+  const container = document.createElement('div');
+  container.className = 'semantic-results';
+  
+  const instructions = document.createElement('div');
+  instructions.style.marginBottom = '1.5rem';
+  instructions.style.fontSize = '1.1rem';
+  instructions.style.opacity = '0.8';
+  instructions.textContent = 'Click on a verse to select and use with Next/Prev navigation:';
+  container.appendChild(instructions);
+  
+  results.forEach((result, index) => {
+    const item = document.createElement('div');
+    item.className = 'semantic-result-item';
+    
+    const ref = document.createElement('div');
+    ref.className = 'reference';
+    ref.textContent = result.reference;
+    
+    const text = document.createElement('div');
+    text.className = 'text';
+    text.textContent = result.text;
+    
+    const similarity = document.createElement('div');
+    similarity.className = 'similarity';
+    similarity.textContent = `Similarity: ${(result.similarity_score * 100).toFixed(1)}%`;
+    
+    item.appendChild(ref);
+    item.appendChild(text);
+    item.appendChild(similarity);
+    
+    // Add click handler to select this verse
+    item.addEventListener('click', () => {
+      selectSemanticResult(result);
+    });
+    
+    container.appendChild(item);
+  });
+  
+  verseEl.appendChild(container);
+}
 
-            const versionLabel = document.createElement('span');
-            versionLabel.className = 'tag is-dark';
-            versionLabel.textContent = 'Version';
-            
-            const versionValue = document.createElement('span');
-            versionValue.className = 'tag is-info';
-            versionValue.textContent = data.version ? data.version.toUpperCase() : 'KJV';
-            
-            versionBadge.appendChild(versionLabel);
-            versionBadge.appendChild(versionValue);
-            resultsContent.appendChild(versionBadge);
-        
-        if (data.found && data.results.length > 0) {
-            // Display verses
-            data.results.forEach(verse => {
-                const verseDiv = document.createElement('div');
-                verseDiv.className = 'verse-result';
-                
-                const reference = document.createElement('div');
-                reference.className = 'verse-reference';
-                reference.textContent = verse.reference;
-                
-                const text = document.createElement('div');
-                text.className = 'verse-text';
-                text.textContent = verse.text;
-                
-                verseDiv.appendChild(reference);
-                verseDiv.appendChild(text);
-                resultsContent.appendChild(verseDiv);
-            });
-            
-            // For semantic search, add preview options if more than one result
-            if (data.query_type === "semantic_search" && data.results.length > 1) {
-                const previewHeader = document.createElement('h4');
-                previewHeader.className = 'title is-5 mt-4';
-                previewHeader.textContent = 'Select a verse to view in detail:';
-                resultsContent.appendChild(previewHeader);
-                
-                const previewContainer = document.createElement('div');
-                previewContainer.className = 'preview-container';
-                
-                data.results.forEach((verse, index) => {
-                    const previewCard = document.createElement('div');
-                    previewCard.className = 'card mb-3 preview-card';
-                    previewCard.innerHTML = `
-                        <div class="card-content">
-                            <p class="title is-6">${verse.reference}</p>
-                            <p class="subtitle is-7">${verse.text.length > 100 ? verse.text.substring(0, 100) + '...' : verse.text}</p>
-                        </div>
-                        <footer class="card-footer">
-                            <a class="card-footer-item view-detail-btn">View Full Verse</a>
-                        </footer>
-                    `;
-                    
-                    // Add click event to view the verse in detail
-                    previewCard.querySelector('.view-detail-btn').addEventListener('click', function() {
-                        // Show the selected verse in detail
-                        showVerseDetail(verse, data.version);
-                    });
-                    
-                    previewContainer.appendChild(previewCard);
-                });
-                
-                resultsContent.appendChild(previewContainer);
-            }
-            
-            // Display AI response if available
-            // Display structured AI response if available, otherwise fallback to ai_response string
-            if (data.ai_response_structured) {
-                const s = data.ai_response_structured;
-                const aiDiv = document.createElement('div');
-                aiDiv.className = 'notification is-light mt-4';
-                // Build a structured rendering
-                let html = '';
-                if (s.type === 'single') {
-                    html += `<p class="title is-5">📖 ${s.query}</p>`;
-                    if (s.verses && s.verses.length > 0) {
-                        html += `<p>${s.verses[0].text}</p>`;
-                    }
-                } else if (s.type === 'range' || s.type === 'semantic') {
-                    html += `<p class="title is-5">📖 ${s.query}</p>`;
-                    s.verses.forEach(v => {
-                        html += `<p><strong>${v.reference}</strong> ${v.text}</p>`;
-                    });
-                } else {
-                    html += `<pre>${JSON.stringify(s, null, 2)}</pre>`;
-                }
-                aiDiv.innerHTML = html;
-                resultsContent.appendChild(aiDiv);
-            } else if (data.ai_response) {
-                const aiDiv = document.createElement('div');
-                aiDiv.className = 'notification is-light mt-4';
-                aiDiv.innerHTML = data.ai_response;
-                resultsContent.appendChild(aiDiv);
-            }
-            
-            // Display range info if applicable
-            if (data.range_info && data.range_info.is_range) {
-                let rangeText = `Range: ${data.query} (Found ${data.range_info.total_verses_found} of ${data.range_info.total_verses_requested} verses)`;
-                
-                if (data.range_info.missing_verses) {
-                    rangeText += `<br>Missing verses: ${data.range_info.missing_verses.join(', ')}`;
-                }
-                
-                rangeInfoContainer.innerHTML = rangeText;
-                rangeInfoContainer.style.display = 'block';
-            }
+async function selectSemanticResult(result) {
+  // Set the current reference and switch to reference mode
+  currentReference = result.reference;
+  document.getElementById('search-mode').value = 'reference';
+  document.getElementById('search-input').value = result.reference;
+  
+  // Display the selected verse directly without additional API calls
+  // to avoid conflicts with the original search endpoint
+  document.getElementById('reference').textContent = result.reference;
+  document.getElementById('verse').textContent = result.text;
+  document.getElementById('verse').classList.remove('multi-verse');
+  
+  updateSyncStatus(true, 'synced');
+}
+
+async function nav(dir) {
+  try {
+    console.log(`[nav] requesting ${dir}, currentReference:`, currentReference);
+    
+    // Check if we're in chunked mode (any range with 4+ verses)
+    if (originalPassage && originalPassage.verses && originalPassage.verses.length > 3) {
+      const totalChunks = Math.ceil(originalPassage.verses.length / chunkSize);
+      
+      if (dir === 'next') {
+        if (currentChunk < totalChunks - 1) {
+          // Move to next chunk within current passage
+          currentChunk++;
+          displayCurrentChunk();
+          return;
         } else {
-            // No results found
-            resultsContent.innerHTML = `
-                <div class="notification is-warning">
-                    ${data.message}
-                </div>
-            `;
-            
-            // Show suggestions if available
-            if (data.suggestions && data.suggestions.length > 0) {
-                const suggestionsDiv = document.createElement('div');
-                suggestionsDiv.className = 'mt-4';
-                suggestionsDiv.innerHTML = '<p>Try one of these:</p>';
-                
-                const tagsDiv = document.createElement('div');
-                tagsDiv.className = 'tags';
-                
-                data.suggestions.forEach(suggestion => {
-                    const tag = document.createElement('span');
-                    tag.className = 'tag is-info is-medium suggestion-tag';
-                    tag.textContent = suggestion;
-                    tag.addEventListener('click', function() {
-                        searchInput.value = suggestion;
-                        performSearch();
-                    });
-                    tagsDiv.appendChild(tag);
-                });
-                
-                suggestionsDiv.appendChild(tagsDiv);
-                resultsContent.appendChild(suggestionsDiv);
-            }
+          // We're at the last chunk, continue navigation beyond original range
+          // Use the last verse of the passage for navigation
+          const lastVerse = originalPassage.verses[originalPassage.verses.length - 1];
+          const params = { 
+            reference: `${originalPassage.book} ${originalPassage.chapter}:${lastVerse.verse}`, 
+            version: document.getElementById('bible-version').value 
+          };
+          const res = await api.get(`/bible/${dir}`, { params });
+          if (res.data && res.data.reference) {
+            const ref = res.data.reference.display || res.data.reference.compact || res.data.reference;
+            // Reset chunking state and load new reference
+            originalPassage = null;
+            currentChunk = 0;
+            await loadRef(ref, document.getElementById('bible-version').value);
+            return;
+          }
         }
+      } else if (dir === 'prev') {
+        if (currentChunk > 0) {
+          // Move to previous chunk within current passage
+          currentChunk--;
+          displayCurrentChunk();
+          return;
+        } else {
+          // We're at the first chunk, continue navigation before original range
+          // Use the first verse of the passage for navigation
+          const firstVerse = originalPassage.verses[0];
+          const params = { 
+            reference: `${originalPassage.book} ${originalPassage.chapter}:${firstVerse.verse}`, 
+            version: document.getElementById('bible-version').value 
+          };
+          const res = await api.get(`/bible/${dir}`, { params });
+          if (res.data && res.data.reference) {
+            const ref = res.data.reference.display || res.data.reference.compact || res.data.reference;
+            // Reset chunking state and load new reference
+            originalPassage = null;
+            currentChunk = 0;
+            await loadRef(ref, document.getElementById('bible-version').value);
+            return;
+          }
+        }
+      }
     }
     
-    // Show the detail view of the selected verse
-    function showVerseDetail(verse, version) {
-        // Clear the results content
-        resultsContent.innerHTML = '';
-        
-        // Show version information if available
-        if (version) {
-            const versionBadge = document.createElement('div');
-            versionBadge.className = 'tags has-addons mb-3';
-            
-            const versionLabel = document.createElement('span');
-            versionLabel.className = 'tag is-dark';
-            versionLabel.textContent = 'Version';
-            
-            const versionValue = document.createElement('span');
-            versionValue.className = 'tag is-info';
-            versionValue.textContent = version.toUpperCase();
-            
-            versionBadge.appendChild(versionLabel);
-            versionBadge.appendChild(versionValue);
-            resultsContent.appendChild(versionBadge);
-        }
-        
-        // Create a back button
-        const backButton = document.createElement('button');
-        backButton.className = 'button is-info is-light mb-4';
-        backButton.innerHTML = '<i class="fas fa-arrow-left"></i>&nbsp; Back to Results';
-        backButton.addEventListener('click', function() {
-            performSearch(); // Re-run the search to get all results again
-        });
-        resultsContent.appendChild(backButton);
-
-        // Add Next button for seamless reading
-        const nextBtn = document.createElement('button');
-        nextBtn.className = 'button is-primary is-light ml-3 mb-4';
-        nextBtn.textContent = 'Next';
-        nextBtn.addEventListener('click', async function() {
-            // Call the next endpoint
-            try {
-                const version = document.getElementById('bible-version').value;
-                const resp = await axios.get('/api/bible/next', { params: { reference: verse.reference, version: version } });
-                showVerseDetail(resp.data, version);
-            } catch (err) {
-                console.error('Next verse error', err);
-                showError('No next verse found.');
-            }
-        });
-        resultsContent.appendChild(nextBtn);
-        // Add Presentation mode button
-        const presBtn = document.createElement('button');
-        presBtn.className = 'button is-link is-light ml-3 mb-4';
-        presBtn.textContent = 'Presentation';
-        presBtn.addEventListener('click', function() {
-            const v = encodeURIComponent(verse.reference);
-            const ver = encodeURIComponent(version || 'kjv');
-            // open presentation via mounted static path
-            window.open(`/static/presentation.html?reference=${v}&version=${ver}`, '_blank');
-        });
-        resultsContent.appendChild(presBtn);
-        
-        // Display the verse in detail
-        const verseDiv = document.createElement('div');
-        verseDiv.className = 'verse-result verse-detail';
-        
-        const reference = document.createElement('div');
-        reference.className = 'verse-reference';
-        reference.textContent = verse.reference;
-        
-        const text = document.createElement('div');
-        text.className = 'verse-text';
-        text.textContent = verse.text;
-        
-        verseDiv.appendChild(reference);
-        verseDiv.appendChild(text);
-        resultsContent.appendChild(verseDiv);
-        
-        // Update the title
-        resultsTitle.textContent = `Viewing: ${verse.reference} (${version ? version.toUpperCase() : 'KJV'})`;
+    // Regular navigation for non-chunked content
+    if (!currentReference) {
+      console.warn('[nav] no current reference set');
+      updateSyncStatus(false, 'no current reference');
+      return;
     }
+    
+    const params = { 
+      reference: currentReference, 
+      version: document.getElementById('bible-version').value 
+    };
+    const res = await api.get(`/bible/${dir}`, { params });
+    console.log(`[nav] ${dir} response`, res.data);
+    if (res.data && res.data.reference) {
+      const ref = res.data.reference.display || res.data.reference.compact || res.data.reference;
+      await loadRef(ref, document.getElementById('bible-version').value);
+    } else {
+      console.warn('[nav] no reference in response');
+      updateSyncStatus(false, 'no next/prev');
+    }
+  } catch (err) {
+    console.error('[nav] error', err);
+    updateSyncStatus(false, 'error');
+  }
+}
 
-    // Keyboard navigation: Left = prev, Right = next, when not focused in an input
-    document.addEventListener('keydown', async function(e) {
-        const active = document.activeElement;
-        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
+document.addEventListener('DOMContentLoaded', () => {
+  const input = document.getElementById('search-input');
+  const btn = document.getElementById('search-btn');
+  // Microphone / voice capture button (added dynamically)
+  const micBtn = document.createElement('button');
+  micBtn.id = 'voice-btn';
+  micBtn.type = 'button';
+  micBtn.textContent = '🎤';
+  micBtn.title = 'Start voice capture';
+  micBtn.style.marginLeft = '0.5rem';
+  micBtn.style.cursor = 'pointer';
+  micBtn.style.padding = '0.45rem 0.6rem';
+  micBtn.style.fontSize = '1.1rem';
+  btn.parentNode && btn.parentNode.insertBefore(micBtn, btn.nextSibling);
+  const micStatus = document.createElement('span');
+  micStatus.id = 'voice-status';
+  micStatus.style.marginLeft = '0.6rem';
+  micStatus.style.opacity = '0.8';
+  micStatus.style.fontSize = '0.95rem';
+  micStatus.textContent = '';
+  btn.parentNode && btn.parentNode.insertBefore(micStatus, micBtn.nextSibling);
+  const prev = document.getElementById('prevBtn');
+  const next = document.getElementById('nextBtn');
+  const refresh = document.getElementById('refreshBtn');
+  const fsBtn = document.getElementById('toggleFs');
+  const perPageSelect = document.getElementById('verses-per-page');
+  const searchModeSelect = document.getElementById('search-mode');
+  
+  // Fullscreen controls
+  const fsVersionSelect = document.getElementById('fullscreen-bible-version');
+  const fsSearchModeSelect = document.getElementById('fullscreen-search-mode');
+  const fsPrev = document.getElementById('fullscreen-prevBtn');
+  const fsNext = document.getElementById('fullscreen-nextBtn');
+  const fsExit = document.getElementById('fullscreen-exitBtn');
 
-        if (e.key === 'ArrowRight') {
-            // If currently viewing a verse detail, try to get the reference text
-            const refElem = document.querySelector('.verse-detail .verse-reference');
-            if (refElem) {
-                const reference = refElem.textContent.trim();
-                const version = document.getElementById('bible-version').value;
-                try {
-                    const resp = await axios.get('/api/bible/next', { params: { reference: reference, version: version } });
-                    showVerseDetail(resp.data, version);
-                } catch (err) {
-                    showError('No more verses.');
-                }
-            }
-        } else if (e.key === 'ArrowLeft') {
-            const refElem = document.querySelector('.verse-detail .verse-reference');
-            if (refElem) {
-                const reference = refElem.textContent.trim();
-                const version = document.getElementById('bible-version').value;
-                try {
-                    const resp = await axios.get('/api/bible/prev', { params: { reference: reference, version: version } });
-                    showVerseDetail(resp.data, version);
-                } catch (err) {
-                    showError('No previous verse.');
-                }
-            }
-        }
+  // Update placeholder text based on search mode
+  function updatePlaceholder() {
+    const mode = searchModeSelect.value;
+    if (mode === 'semantic') {
+      input.placeholder = 'Enter text to search (e.g. "love your enemies")';
+    } else {
+      input.placeholder = 'Enter reference (e.g. John 3:16)';
+    }
+  }
+
+  // Initialize placeholder
+  updatePlaceholder();
+  
+  // Update placeholder when mode changes
+  searchModeSelect.addEventListener('change', updatePlaceholder);
+
+  // Sync version selectors
+  function syncVersions() {
+    const mainVersion = document.getElementById('bible-version').value;
+    if (fsVersionSelect) fsVersionSelect.value = mainVersion;
+  }
+  
+  // Sync search mode selectors
+  function syncSearchModes() {
+    const mainMode = searchModeSelect.value;
+    if (fsSearchModeSelect) fsSearchModeSelect.value = mainMode;
+  }
+  
+  // Sync versions and modes when main selectors change
+  document.getElementById('bible-version').addEventListener('change', syncVersions);
+  searchModeSelect.addEventListener('change', syncSearchModes);
+  
+  // Handle fullscreen version change
+  if (fsVersionSelect) {
+    fsVersionSelect.addEventListener('change', () => {
+      document.getElementById('bible-version').value = fsVersionSelect.value;
+      // Reload current reference with new version
+      if (lastQuery) loadRef(lastQuery.query, fsVersionSelect.value);
     });
-    
-    // Show an error message
-    function showError(message) {
-        resultsContainer.style.display = 'block';
-        resultsTitle.textContent = 'Error';
-        resultsContent.innerHTML = `
-            <div class="notification is-danger">
-                ${message}
-            </div>
-        `;
-    }
-    
-    // Load example searches from the server
-    async function loadExamples() {
+  }
+  
+  // Handle fullscreen search mode change
+  if (fsSearchModeSelect) {
+    fsSearchModeSelect.addEventListener('change', () => {
+      searchModeSelect.value = fsSearchModeSelect.value;
+      updatePlaceholder();
+    });
+  }
+
+  btn.addEventListener('click', () => {
+    const q = input.value.trim();
+    const v = document.getElementById('bible-version').value;
+    loadRef(q, v);
+  });
+
+  // Voice capture: use Web Speech API (webkitSpeechRecognition fallback)
+  let recognition = null;
+  let recognizing = false;
+  function supportsSpeech() {
+    return ('SpeechRecognition' in window) || ('webkitSpeechRecognition' in window);
+  }
+
+  if (supportsSpeech()) {
+    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new Rec();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.continuous = false;
+
+    recognition.onstart = () => {
+      recognizing = true;
+      micBtn.textContent = '●';
+      micBtn.style.color = 'crimson';
+      micStatus.textContent = 'listening...';
+    };
+
+    recognition.onerror = (e) => {
+      console.error('[voice] error', e);
+      micStatus.textContent = 'error';
+      recognizing = false;
+      micBtn.textContent = '🎤';
+      micBtn.style.color = '';
+    };
+
+    recognition.onend = () => {
+      recognizing = false;
+      micBtn.textContent = '🎤';
+      micBtn.style.color = '';
+      if (micStatus.textContent === 'listening...') micStatus.textContent = '';
+    };
+
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results).map(r => r[0].transcript).join(' ').trim();
+      console.log('[voice] transcript', transcript);
+      micStatus.textContent = '';
+      input.value = transcript;
+
+      // Simple heuristic to detect reference-like input
+      const refLike = /\b[A-Za-z]+\s+\d+(?::\d+(-\d+)?)?(?:-\d+)?\b/.test(transcript) || /:\d+/.test(transcript);
+      const version = document.getElementById('bible-version').value;
+
+      if (refLike) {
+        // Ensure search mode set to reference and load reference
+        const searchModeSelect = document.getElementById('search-mode');
+        if (searchModeSelect) searchModeSelect.value = 'reference';
+        loadRef(transcript, version);
+      } else {
+        // Use semantic search for natural language
+        const searchModeSelect = document.getElementById('search-mode');
+        if (searchModeSelect) searchModeSelect.value = 'semantic';
+        loadSemanticSearch(transcript, version);
+      }
+    };
+
+    micBtn.addEventListener('click', () => {
+      if (!recognition) return;
+      if (recognizing) {
+        recognition.stop();
+        recognizing = false;
+        micBtn.textContent = '🎤';
+        micStatus.textContent = '';
+      } else {
         try {
-            const response = await axios.get('/api/bible/examples');
-            const examples = response.data;
-            
-            populateExamples('single-verse-examples', examples.exact_references);
-            populateExamples('range-examples', examples.verse_ranges);
-            populateExamples('topic-examples', examples.semantic_searches);
-            populateExamples('quote-examples', examples.quoted_text);
-        } catch (error) {
-            console.error('Error loading examples:', error);
+          recognition.start();
+        } catch (e) {
+          console.warn('[voice] start error', e);
         }
+      }
+    });
+  } else {
+    micBtn.title = 'Voice not supported in this browser';
+    micBtn.disabled = true;
+    micBtn.style.opacity = '0.45';
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') btn.click();
+  });
+
+  prev.addEventListener('click', async () => {
+    console.log('[ui] prev clicked');
+    await nav('prev');
+  });
+
+  next.addEventListener('click', async () => {
+    console.log('[ui] next clicked');
+    await nav('next');
+  });
+
+  refresh.addEventListener('click', async () => {
+    console.log('[ui] refresh clicked', lastQuery);
+    if (lastQuery) await loadRef(lastQuery.query, lastQuery.version);
+  });
+
+  // Fullscreen navigation
+  if (fsPrev) {
+    fsPrev.addEventListener('click', async () => {
+      console.log('[ui] fullscreen prev clicked');
+      // Update the main version selector to match fullscreen version before nav
+      const fsVersion = fsVersionSelect ? fsVersionSelect.value : null;
+      if (fsVersion) document.getElementById('bible-version').value = fsVersion;
+      await nav('prev');
+    });
+  }
+
+  if (fsNext) {
+    fsNext.addEventListener('click', async () => {
+      console.log('[ui] fullscreen next clicked');
+      // Update the main version selector to match fullscreen version before nav
+      const fsVersion = fsVersionSelect ? fsVersionSelect.value : null;
+      if (fsVersion) document.getElementById('bible-version').value = fsVersion;
+      await nav('next');
+    });
+  }
+
+  if (fsExit) {
+    fsExit.addEventListener('click', () => {
+      if (document.fullscreenElement) document.exitFullscreen();
+    });
+  }
+
+  fsBtn.addEventListener('click', () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen();
+      syncVersions(); // Ensure versions are synced when entering fullscreen
+      syncSearchModes(); // Ensure search modes are synced when entering fullscreen
+    } else {
+      document.exitFullscreen();
     }
-    
-    // Populate the example searches in the UI
-    function populateExamples(elementId, examples) {
-        const container = document.getElementById(elementId);
-        examples.forEach(example => {
-            const li = document.createElement('li');
-            const a = document.createElement('a');
-            a.href = '#';
-            a.textContent = example;
-            a.addEventListener('click', function(e) {
-                e.preventDefault();
-                searchInput.value = example;
-                performSearch();
-            });
-            li.appendChild(a);
-            container.appendChild(li);
-        });
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') prev.click();
+    if (e.key === 'ArrowRight') next.click();
+  });
+
+  // Handle fullscreen changes (including ESC key exit)
+  document.addEventListener('fullscreenchange', () => {
+    if (document.fullscreenElement) {
+      syncVersions(); // Sync versions when entering fullscreen
+      syncSearchModes(); // Sync search modes when entering fullscreen
     }
+  });
+
+  // persist per-page selection
+  try {
+    const stored = localStorage.getItem('verses-per-page');
+    if (stored && perPageSelect) perPageSelect.value = stored;
+    if (perPageSelect) perPageSelect.addEventListener('change', () => {
+      localStorage.setItem('verses-per-page', perPageSelect.value);
+    });
+  } catch (e) {}
+
+  // initial health check
+  (async function() {
+    try {
+      const h = await axios.get('/api/bible/health');
+      if (h && h.data && h.data.status === 'healthy') updateSyncStatus(true, 'Backend online');
+      else updateSyncStatus(false, 'Backend unexpected response');
+    } catch (e) { updateSyncStatus(false, 'Backend offline'); }
+  })();
 });
 
-// Add event listeners for search input and button
-// Define functions to perform search and fetch suggestions
-// Display search results and handle errors
+// Expose for debugging
+window._app = { loadRef, nav };
+console.log('[app.js] loaded', new Date().toISOString());

@@ -110,6 +110,37 @@ class BibleChunker:
         book_lower = book.lower().strip()
         return self.book_abbreviations.get(book_lower, book.title())
     
+    def is_chapter_reference(self, text: str) -> bool:
+        """
+        Check if the input text is a chapter-only reference like 'Genesis 12'
+        """
+        chapter_patterns = [
+            r'^[12]?\s*[A-Za-z]+\.?\s+\d+$',               # Genesis 12, 1 Kings 5
+            r'^[A-Za-z\s]+\s+\d+$'                         # Song of Solomon 2
+        ]
+        
+        for pattern in chapter_patterns:
+            if re.match(pattern, text.strip()):
+                return True
+        return False
+    
+    def parse_chapter_reference(self, reference: str) -> Tuple[str, int]:
+        """
+        Parse a chapter-only Bible reference like 'Genesis 12' into components
+        Returns: (book, chapter)
+        """
+        # Pattern to match: Book Chapter
+        pattern = r'^(.+?)\s+(\d+)$'
+        match = re.match(pattern, reference.strip())
+        
+        if not match:
+            raise ValueError(f"Invalid chapter reference format: {reference}")
+        
+        book_name = self.normalize_book_name(match.group(1))
+        chapter = int(match.group(2))
+        
+        return book_name, chapter
+    
     def parse_reference(self, reference: str) -> Tuple[str, int, int]:
         """
         Parse a single Bible reference like 'John 3:16' into components
@@ -210,14 +241,16 @@ class BibleChunker:
     
     def is_reference_format(self, text: str) -> bool:
         """
-        Check if the input text looks like a Bible reference (single or range)
+        Check if the input text looks like a Bible reference (single, range, or chapter)
         """
-        # Enhanced patterns for both single references and ranges
+        # Enhanced patterns for single references, ranges, and chapters
         reference_patterns = [
             r'^[12]?\s*[A-Za-z]+\.?\s+\d+:\d+$',           # John 3:16
             r'^[12]?\s*[A-Za-z]+\.?\s+\d+:\d+-\d+$',       # John 3:16-18
             r'^[A-Za-z\s]+\s+\d+:\d+$',                    # Song of Solomon 2:1  
-            r'^[A-Za-z\s]+\s+\d+:\d+-\d+$'                 # Song of Solomon 2:1-3
+            r'^[A-Za-z\s]+\s+\d+:\d+-\d+$',                # Song of Solomon 2:1-3
+            r'^[12]?\s*[A-Za-z]+\.?\s+\d+$',               # Genesis 12 (chapter only)
+            r'^[A-Za-z\s]+\s+\d+$'                         # Song of Solomon 2 (chapter only)
         ]
         
         for pattern in reference_patterns:

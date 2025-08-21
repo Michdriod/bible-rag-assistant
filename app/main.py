@@ -1,6 +1,6 @@
 # Import necessary modules and libraries for the application
 import os
-from fastapi import FastAPI, Request, Depends
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
@@ -28,6 +28,38 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     print("👋 Shutting down Bible RAG Assistant...")
+    # Attempt to clean up common multiprocessing/executor resources that may leak semaphores
+    try:
+        # If an executor was stored on app.state, shut it down
+        ex = getattr(app.state, 'process_executor', None)
+        if ex is not None:
+            try:
+                ex.shutdown(wait=True)
+                print('✅ process_executor shutdown')
+            except Exception:
+                print('⚠️ process_executor shutdown failed')
+
+        mgr = getattr(app.state, 'mp_manager', None)
+        if mgr is not None:
+            try:
+                mgr.shutdown()
+                print('✅ mp_manager shutdown')
+            except Exception:
+                print('⚠️ mp_manager shutdown failed')
+
+        # Try to join/terminate any active multiprocessing children
+        import multiprocessing
+        children = multiprocessing.active_children()
+        if children:
+            print(f'⚠️ Found {len(children)} active child process(es); attempting to terminate...')
+            for c in children:
+                try:
+                    c.terminate()
+                except Exception:
+                    pass
+    except Exception as e:
+        print('⚠️ Exception during shutdown cleanup:', e)
+
     await engine.dispose()
 
 # Create FastAPI app

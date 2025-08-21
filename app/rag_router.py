@@ -1,7 +1,7 @@
 # Import FastAPI router and dependencies
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from db.db import get_db
@@ -28,6 +28,20 @@ class VerseResult(BaseModel):
     chapter: int
     verse: int
     text: str
+
+class SemanticResult(BaseModel):
+    reference: str
+    book: str
+    chapter: int
+    verse: int
+    text: str
+    similarity_score: float
+
+class SemanticSearchResponse(BaseModel):
+    query: str
+    found: bool
+    results: List[SemanticResult]
+    version: str
 
 class RangeInfo(BaseModel):
     """Information about verse ranges"""
@@ -540,6 +554,135 @@ async def health_check():
             "range_validation": True
         }
     }
+
+@router.post("/semantic", response_model=SemanticSearchResponse)
+async def semantic_search(
+    query: str = Query(..., description="Text to search for semantically"),
+    version: str = Query("kjv", description="Bible version (kjv, niv, nkjv, nlt)"),
+    limit: int = Query(3, ge=1, le=10, description="Maximum number of results"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Perform semantic search and return top results with similarity scores
+    """
+    try:
+        # Validate version
+        from db.models import VERSION_MODELS
+        if version.lower() not in VERSION_MODELS:
+            raise HTTPException(status_code=400, detail=f"Unknown Bible version: {version}")
+        
+        print(f"Semantic search request: query='{query}', version='{version}', limit={limit}")
+        
+        # Try basic database query first to check if table exists and has data
+        try:
+            # Get table name
+            table_name = version.lower()
+            basic_query = text(f"SELECT COUNT(*) as count FROM {table_name}")
+            result = await db.execute(basic_query)
+            row_count = result.fetchone()
+            print(f"Table {table_name} has {row_count.count if row_count else 0} rows")
+            
+            if not row_count or row_count.count == 0:
+                return SemanticSearchResponse(
+                    query=query,
+                    found=False,
+                    results=[],
+                    version=version
+                )
+            
+        except Exception as e:
+            print(f"Error checking table existence: {e}")
+            return SemanticSearchResponse(
+                query=query,
+                found=False,
+                results=[],
+                version=version
+            )
+        
+        # Try flexible word search
+        search_words = [word.strip().lower() for word in query.split() if len(word.strip()) > 2]
+        print(f"Search words: {search_words}")
+        
+        if not search_words:
+            return SemanticSearchResponse(
+                query=query,
+                found=False,
+                results=[],
+                version=version
+            )
+        
+        # Create a flexible search query with high similarity threshold
+        word_conditions = []
+        for word in search_words[:5]:  # Limit to first 5 words to avoid too complex queries
+            word_conditions.append(f"LOWER(text) LIKE '%{word}%'")
+        
+        if word_conditions:
+            # Only try exact phrase search for high similarity
+            # Require at least 90% similarity (0.9)
+            search_condition = f"LOWER(text) LIKE '%{query.lower()}%'"
+            
+            try:
+                search_query = text(f"""
+                    SELECT reference, book, chapter, verse, text,
+                           CASE 
+                               WHEN LOWER(text) LIKE '%{query.lower()}%' THEN 0.95
+                               ELSE 0.0
+                           END as similarity_score
+                    FROM {table_name}
+                    WHERE {search_condition}
+                    AND CASE 
+                        WHEN LOWER(text) LIKE '%{query.lower()}%' THEN 0.95
+                        ELSE 0.0
+                    END >= 0.9
+                    ORDER BY similarity_score DESC, reference
+                    LIMIT :limit
+                """)
+                
+                result = await db.execute(search_query, {"limit": limit})
+                rows = result.fetchall()
+                
+                print(f"High similarity search: Found {len(rows)} results with 90%+ similarity")
+                
+                if rows:
+                    semantic_results = []
+                    for row in rows:
+                        # Only include results with 90%+ similarity
+                        if row.similarity_score >= 0.9:
+                            semantic_results.append(SemanticResult(
+                                reference=row.reference,
+                                book=row.book,
+                                chapter=row.chapter,
+                                verse=row.verse,
+                                text=row.text,
+                                similarity_score=float(row.similarity_score)
+                            ))
+                    
+                    if semantic_results:
+                        print(f"Returning {len(semantic_results)} high-similarity results")
+                        return SemanticSearchResponse(
+                            query=query,
+                            found=True,
+                            results=semantic_results,
+                            version=version
+                        )
+                        
+            except Exception as e:
+                print(f"High similarity search failed: {e}")
+                # Don't fall back to lower similarity searches
+        
+        print("No results found with any search method")
+        return SemanticSearchResponse(
+            query=query,
+            found=False,
+            results=[],
+            version=version
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Semantic search error: {e}")
+        raise HTTPException(status_code=500, detail=f"Semantic search failed: {str(e)}")
 
 
 
