@@ -1,143 +1,149 @@
-# Bible RAG Agent System
+## Bible RAG Agent System
 
-A Retrieval-Augmented Generation (RAG) system for Bible verses with support for multiple Bible versions.
+A focused Retrieval-Augmented Generation (RAG) application for searching Bible verses. It provides exact-reference lookups, range handling, semantic search (vector embeddings), a web UI with presentation mode, and a small set of backend APIs.
 
-## Features
+## At a glance
+- FastAPI backend (served from `app.main`) with an API router at `/api/bible`.
+- PostgreSQL database (recommended with `pgvector`) for verse storage and embeddings.
+- Vanilla JavaScript frontend in `static/` (`index.html`, `app.js`, `presentation.html`).
+- Features: exact references, verse ranges, smart chunked pagination for long passages, semantic search with top-N candidates, voice-capture (Web Speech API), and fullscreen presentation mode.
 
-- Search Bible verses by reference, range, topic, or semantic meaning
-- Support for multiple Bible versions (KJV, NIV, NKJV, NLT)
-- Semantic search using vector embeddings
-- Web interface for querying Bible verses
-- CLI interface for command-line access
+## Quick start (development)
 
-## Setup
+Prerequisites
+- Python 3.12+ (the project is tested on 3.12)
+- PostgreSQL database with the `pgvector` extension
+- A POSIX shell (macOS `zsh` used in examples)
 
-### Prerequisites
+Local setup
 
-- Python 3.9+
-- PostgreSQL with pgvector extension
-- Python packages (see requirements.txt)
+1. Create and activate a virtual environment:
 
-### Installation
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
 
-1. Clone the repository
-2. Install dependencies: `pip install -r requirements.txt`
-3. Set up environment variables in `.env` file:
+2. Install Python dependencies (project tracks deps in `pyproject.toml`):
 
-   ```bash
-   DATABASE_URL=postgresql+asyncpg://username:password@localhost:5432/bible_rag
-   # Bible RAG Agent System
+```bash
+pip install -r requiremnets.txt
+```
 
-   A small Retrieval-Augmented Generation (RAG) system for searching Bible verses. Designed to work with a PostgreSQL database (with pgvector) and a lightweight FastAPI frontend for live presentation use.
+3. Create a `.env` file in the project root with at minimum a `DATABASE_URL` (do not commit this file):
 
-   ## Highlights
+```text
+DATABASE_URL=postgresql+asyncpg://<user>:<password>@localhost:5432/<db_name>
+```
 
-   - Exact and range lookups (e.g. `John 3:16`, `Matthew 5:3-12`)
-   - Semantic search via vector embeddings
-   - Multiple versions supported: `kjv`, `niv`, `nkjv`, `nlt`
-   - Deterministic structured AI output (no LLM network calls by default)
-   - Presentation mode for full-screen projector display with keyboard navigation
+4. Start the development server:
 
-   ## Quick start
+```bash
+# run from repo root
+export DEBUG=true   # optional
+uvicorn app.main:app --reload
+```
 
-   Requirements
-   - Python 3.10+ (3.12 tested in this workspace)
-   - PostgreSQL with `pgvector` extension
-   - A Python virtualenv (recommended)
+Open the UI: http://127.0.0.1:8000
 
-   Install
+## Important env notes
+- Keep secrets (API keys, DB credentials) out of the repo. Add `.env` to `.gitignore`.
+- If you accidentally commit secrets, rotate them immediately and remove them from history (see Troubleshooting / Git hygiene below).
 
-   ```bash
-   # from project root
-   python -m venv .venv
-   source .venv/bin/activate
-   pip install -r requiremnets.txt
-   ```
+## Backend API overview
+The FastAPI app mounts routes under `/api/bible`. Major endpoints used by the frontend include:
 
-   Environment
+- POST /api/bible/search
+   - Request JSON: { "query": "John 3:16" , "version": "kjv", "include_context": false }
+   - Supports exact references, ranges (e.g., `Genesis 1:1-12`), free-text/topic, and quoted text.
+   - Returns structured `results` (list of verse objects), a `message`, optional `ai_response_structured`, and a computed `next_reference` for UI navigation.
 
-   Create a `.env` file in the project root with at least your database URL:
+- GET /api/bible/search?q=... (convenience GET)
 
-   ```
-   DATABASE_URL=postgresql+asyncpg://<user>:<pass>@localhost:5432/<db>
-   ```
+- GET /api/bible/next?reference=Book+X:Y:Z&version=kjv
+   - Returns the immediate next verse after the provided reference.
 
-   Run the app (development)
+- GET /api/bible/prev?reference=...&version=...
+   - Returns the immediate previous verse.
 
-   ```bash
-   export DEBUG=true      # optional, enables extra logs
-   uvicorn app.main:app --reload
-   ```
+- GET /api/bible/suggestions?q=... and /api/bible/examples (helpers for UI)
 
-   Open the UI: http://127.0.0.1:8000
+- Health: GET /health
 
-   ## Embeddings
+Note: The router also exposes range validation and other helper endpoints used by the UI.
 
-   If your Bible text is already in the database, generate embeddings without re-ingesting:
+Semantic search
+- The project includes a semantic search flow that uses vector embeddings stored in the DB (pgvector). The frontend exposes a `semantic` search mode which calls a semantic endpoint and shows the top-3 candidate verses; the user can click one to select it and then continue using Next/Prev navigation.
 
-   ```bash
-   # interactive script
-   python embed.py
+Example usage (curl):
 
-   # or use the generator script for specific versions
-   python -m utils.generate_embeddings --version kjv
-   python -m utils.generate_embeddings   # all versions
-   python -m utils.generate_embeddings --force  # regenerate
-   ```
+```bash
+curl -s -X POST "http://127.0.0.1:8000/api/bible/search" \
+   -H "Content-Type: application/json" \
+   -d '{"query":"Genesis 1:1-12","version":"kjv"}' | jq
+```
 
-   Notes
-   - The generator uses a `WHERE embedding IS NULL LIMIT <batch>` loop (no OFFSET) so it won't re-process already-embedded rows.
-   - The code stores vectors in a pgvector-compatible form. Ensure `pgvector` is installed in your DB.
+## Frontend behavior (what to expect)
 
-   ## Presentation mode
+- Main UI: `static/index.html` + `static/app.js`.
+- Presentation mode: `static/presentation.html` (loads the same logic but optimized for projector display).
+- Smart chunking: when a range returns 4+ verses the frontend uses "smart chunking" (default chunk size = 3). The UI will show the first chunk and Next/Prev move through chunks; when you reach the end of the range, Next continues to the verse after the range using the backend `/next` endpoint. Similarly Prev moves before the range when at the first chunk.
+- Canonical reference in the top `#reference` element is computed from API results (the app prefers a canonical display like `Genesis 1:1-3`).
+- Voice capture: a microphone button uses the browser Web Speech API (when available). Transcribed speech is heuristically classified as a reference (e.g., `John 3:16`) or natural language; the app then triggers a reference lookup or a semantic search automatically.
 
-   Open the presentation page in a separate window (projector) to display a single verse in large font and navigate with keyboard arrows or the on-screen buttons:
+UX details
+- Short ranges (2-3 verses) are shown without chunking and use a paged view by verses-per-page setting.
+- Single verses are displayed plainly.
+- Semantic search shows up to three candidates with similarity scores and requires the user to click a result to set it as the active reference.
 
-   ```
-   http://127.0.0.1:8000/static/presentation.html?reference=John%203:16&version=kjv
-   ```
+## Embeddings and ingestion
 
-   You can also open a verse from the main UI using the Presentation button on the verse detail view.
+- `embed.py` and `utils/generate_embeddings.py` are provided to create/store embeddings for verse rows already present in the DB.
+- Embedding scripts will usually only process rows where `embedding IS NULL` (no OFFSET) so re-running won't reprocess already-embedded rows unless `--force` is used.
 
-   ## Cache-busting (development)
+## Tests
 
-   Browsers aggressively cache static assets. During development the app now injects a timestamp query parameter to ensure fresh `app.js` is fetched on each load. If you still see stale UI:
+- Unit/integration tests are located in `tests/`. Run with pytest:
 
-   - Hard-reload (Shift+Cmd+R on mac)
-   - Open DevTools → Network → check "Disable cache" and reload
-   - Or use an Incognito window
+```bash
+pip install pytest httpx
+pytest -q
+```
 
-   ## Tests
+## Troubleshooting & developer tips
 
-   Basic integration tests are included in `tests/`. They require `pytest` and `httpx`:
+- Static assets caching: if you change `static/app.js` and see stale behavior, do a hard reload (Shift+Cmd+R on mac) or open DevTools → Network → Disable cache.
+- If presentation/fullscreen behaves differently, ensure the browser loaded the latest `app.js` and that no duplicate event handlers are present.
+- If semantic results look empty, confirm the DB has embeddings and that `pgvector` is configured correctly.
 
-   ```bash
-   pip install pytest httpx
-   pytest -q
-   ```
+Git hygiene (secrets)
+- Never commit `.env` or API keys. If you accidentally push secrets to GitHub, rotate the exposed key immediately and remove it from history using `git filter-repo` or the BFG tool. Add `.env` to `.gitignore`.
 
-   ## Troubleshooting
+Example quick fix for a recent accidental commit (safe when the bad commit is the latest):
 
-   resource_tracker warning on shutdown
+```bash
+# move sensitive file out of repo
+mv .env ../env-backup
+git rm --cached .env || true
+echo ".env" >> .gitignore
+git add .gitignore
+git commit --amend --no-edit
+git push --force-with-lease origin master
+```
 
-   If you see a warning like:
+If the secret exists in older commits, prefer `git filter-repo` (recommended) or the BFG Cleaner; coordinate with collaborators because history rewrite requires force-push and re-clone.
 
-   ```
-   resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown
-   ```
+## Contributing and next steps
 
-   It usually means a multiprocessing/executor/manager wasn't shut down before process exit. Fixes:
+- If you'd like, I can:
+   - Add CI checks to block accidental secrets locally
+   - Add automated tests for chunking/navigation and semantic selection
+   - Add an optional fingerprinted static build step for production
 
-   - Run without `--reload` to see if the dev reloader caused it.
-   - Make sure any `ProcessPoolExecutor`, `multiprocessing.Manager`, or `Pool` you create is `.shutdown()`/`.close()`/`.join()` in an `@app.on_event('shutdown')` handler.
+## Contact / Support
 
-   This project includes defensive shutdown cleanup in `app/main.py` to attempt to close common executors/managers and terminate stray child processes on shutdown.
+Open an issue in this repository with reproduction steps and example inputs (e.g., which reference or natural-language query produced unexpected results). Include browser console logs for frontend issues.
 
-   ## Deployment notes
+---
+Generated from the current codebase (FastAPI router: `app/rag_router.py`, server entry: `app/main.py`, frontend: `static/app.js`).
 
-   - Use a proper process manager (systemd, docker, or a cloud service) in production and avoid uvicorn `--reload` there.
-   - Consider fingerprinting static assets in production instead of timestamp query strings.
-
-   ## Want changes?
-
-   Tell me whether you prefer a single-file frontend (merge presentation into `app.js`) or keep separate pages (current). I can switch either way and adapt cache-busting/fingerprinting accordingly.
