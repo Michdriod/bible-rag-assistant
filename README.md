@@ -46,9 +46,56 @@ uvicorn app.main:app --reload
 
 Open the UI: http://127.0.0.1:8000
 
-## Important env notes
-- Keep secrets (API keys, DB credentials) out of the repo. Add `.env` to `.gitignore`.
-- If you accidentally commit secrets, rotate them immediately and remove them from history (see Troubleshooting / Git hygiene below).
+## Required environment variables
+
+Create a `.env` file in the project root (do not commit it). The project reads configuration from environment variables; below are the commonly used variables and recommended defaults:
+
+- DATABASE_URL (required)
+   - Example: `postgresql+asyncpg://<user>:<password>@localhost:5432/<db_name>`
+   - Purpose: connection string for PostgreSQL (used by `db/db.py` and FastAPI startup).
+
+- EMBEDDING_MODEL (optional)
+   - Example: `sentence-transformers/all-MiniLM-L6-v2`
+   - Purpose: selects the local embedding model name used by the embedding service. If unset, the code falls back to the default model in `utils/embedding.py`.
+
+- GROQ_API_KEY (required only if using GROQ provider)
+   - Purpose: API key for the `groq` / `pydantic-ai` provider (used in `app/agents/task_router.py`). Keep this secret out of the repo and rotate immediately if exposed.
+
+- RAG_API_URL (optional)
+   - Example: `http://localhost:8000/api/bible`
+   - Purpose: used by the CLI (`cli.py`) to target the running API server; defaults to `http://localhost:8000/api/bible` when not set.
+
+- DEBUG (optional)
+   - Example: `true`
+   - Purpose: lightweight flag you may export during development to enable extra logging; not required by the server but used in local startup examples.
+
+Quick `.env` example (do not commit):
+
+```text
+DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/bible_rag
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+# Set GROQ_API_KEY only if you need the Groq provider
+# GROQ_API_KEY=your_groq_api_key_here
+
+```
+
+Security reminder
+- Add `.env` to `.gitignore` to avoid committing secrets.
+- If you accidentally commit an API key or credential, rotate that credential immediately and remove it from Git history (see Troubleshooting / Git hygiene below). Use `git filter-repo` or the BFG Repo-Cleaner to scrub older commits; if the secret is only in the most recent commit you can `git rm --cached .env` and amend the commit.
+
+Example quick steps to stop committing `.env` (local fix):
+
+```bash
+# move sensitive file out of repo working tree
+mv .env ../env-backup
+git rm --cached .env || true
+echo ".env" >> .gitignore
+git add .gitignore
+git commit --amend --no-edit
+git push --force-with-lease origin master
+```
+
+Note: rewriting history (`git push --force-with-lease`) affects collaborators; coordinate before doing this on shared branches.
 
 ## Backend API overview
 The FastAPI app mounts routes under `/api/bible`. Major endpoints used by the frontend include:
