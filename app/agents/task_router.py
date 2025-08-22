@@ -33,15 +33,16 @@ class TaskRouterAgent:
     
         # Get the API key
         if not api_key:
-            raise ValueError("GROQ_API_KEY environment variable is not set")
-        
-        model = GroqModel(
-            "llama-3.1-8b-instant",
-            provider=GroqProvider(api_key=api_key)
-        )
-        
-        # Initialize the main routing agent with STRICT instructions
-        self.router_agent = Agent(model,
+            logger.warning("GROQ_API_KEY environment variable is not set - LLM-based features will be disabled")
+            self.router_agent = None
+        else:
+            model = GroqModel(
+                "llama-3.1-8b-instant",
+                provider=GroqProvider(api_key=api_key)
+            )
+
+            # Initialize the main routing agent with STRICT instructions
+            self.router_agent = Agent(model,
             system_prompt=
             """You are a Bible assistant router that ONLY provides general guidance.
 
@@ -99,7 +100,8 @@ class TaskRouterAgent:
         try:
             # Validate the version
             from db.models import VERSION_MODELS
-            if version.lower() not in VERSION_MODELS:
+            # Allow callers to pass 'auto' for automatic version detection
+            if version.lower() != 'auto' and version.lower() not in VERSION_MODELS:
                 raise ValueError(f"Unknown Bible version: {version}")
                 
             # Normalize version to lowercase
@@ -161,13 +163,83 @@ class TaskRouterAgent:
     
     async def _handle_semantic_search(self, session: AsyncSession, user_input: str, version: str = "kjv") -> Dict[str, Any]:
         """Handle semantic search with similarity validation"""
-        result = await self.retriever_agent.retrieve_verses(session, user_input, version)
-        
-        # Additional validation for semantic search
-        if not result["found"]:
-            result["message"] = f"No sufficiently similar verses found for '{user_input}' in database ({version.upper()})."
-            
-        return result
+        # If caller explicitly requests auto-detection or the given version yields no results,
+        # attempt semantic search across all available versions and pick the best-scoring set.
+        from db.models import VERSION_MODELS
+
+        # Normalize version
+        version = (version or "").lower()
+
+        # Helper to call retriever directly for semantic search (returns dict with results)
+        async def run_for_version(v: str) -> Dict[str, Any]:
+            try:
+                logger.debug("run_for_version - calling retriever.semantic_search for version=%s", v)
+                verses = await self.retriever_agent.semantic_search(session, user_input, v, limit=3)
+                if not verses:
+                    return {"version": v, "found": False, "results": [], "message": ""}
+                # Compute a top similarity score for this version (verses may be dicts with similarity_score)
+                top_score = None
+                for r in verses:
+                    if isinstance(r, dict) and r.get("similarity_score") is not None:
+                        try:
+                            s = float(r.get("similarity_score"))
+                        except Exception:
+                            s = None
+                    else:
+                        s = None
+                    if s is not None:
+                        top_score = s if top_score is None else max(top_score, s)
+                logger.debug("run_for_version - version=%s top_score=%s result_count=%d", v, top_score, len(verses))
+                return {"version": v, "found": True, "results": verses, "top_score": top_score or 0.0}
+            except Exception as e:
+                return {"version": v, "found": False, "results": [], "message": str(e), "top_score": 0.0}
+
+        # If the caller asked for a specific version (not 'auto'), try it first
+        tried_versions = []
+        if version and version != 'auto':
+            tried_versions.append(version)
+            primary = await run_for_version(version)
+            if primary.get('found'):
+                # Attach the detected version and return
+                primary['message'] = primary.get('message') or f"Found {len(primary.get('results', []))} relevant verses for: {user_input} ({version.upper()})"
+                primary['query'] = user_input
+                primary['query_type'] = 'semantic_search'
+                return primary
+
+        # Otherwise, or if primary had no results, try auto-detection across all versions
+        best = {"version": None, "found": False, "results": [], "top_score": 0.0}
+        for v in VERSION_MODELS.keys():
+            if v in tried_versions:
+                continue
+            candidate = await run_for_version(v)
+            # prefer higher top_score
+            try:
+                if candidate.get('found') and float(candidate.get('top_score', 0.0)) > float(best.get('top_score', 0.0)):
+                    best = candidate
+            except Exception:
+                continue
+
+        if not best.get('found'):
+            return {
+                "query_type": "semantic_search",
+                "query": user_input,
+                "results": [],
+                "found": False,
+                "version": version or 'auto',
+                "message": f"No sufficiently similar verses found for: {user_input} ({(version or 'AUTO').upper()})",
+                "is_range": False
+            }
+
+        # Format a successful result mapping to previous return contract
+        return {
+            "query_type": "semantic_search",
+            "query": user_input,
+            "results": best.get('results', []),
+            "found": True,
+            "version": best.get('version'),
+            "message": f"Found {len(best.get('results', []))} relevant verses for: {user_input} ({best.get('version').upper()})",
+            "is_range": False
+        }
     
     async def _handle_general_help(self, user_input: str) -> Dict[str, Any]:
         """Handle general help queries WITHOUT generating Bible content"""

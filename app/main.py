@@ -8,12 +8,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import uvicorn
 from dotenv import load_dotenv
+import logging
 
 from app.rag_router import router as rag_router
 from db.db import create_tables, engine
 
 # Load environment variables
 load_dotenv()
+
+# Configure root logging for debug during local runs
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s [%(name)s] %(message)s')
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

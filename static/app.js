@@ -5,6 +5,56 @@ const api = axios.create({ baseURL: '/api' });
 
 let currentReference = null;
 let lastQuery = null;
+// Holds the Bible version detected by a semantic search (set by /api/bible/semantic response)
+let semanticDetectedVersion = null;
+
+// UI: show detected version badge with Accept/Change
+function showDetectedVersionBadge(version) {
+  try {
+    let badge = document.getElementById('detected-version-badge');
+    const container = document.getElementById('controls') || document.body;
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.id = 'detected-version-badge';
+      badge.style.position = 'absolute';
+      badge.style.right = '1rem';
+      badge.style.top = '1rem';
+      badge.style.background = '#fff8dc';
+      badge.style.border = '1px solid #e0c070';
+      badge.style.padding = '0.4rem 0.6rem';
+      badge.style.borderRadius = '6px';
+      badge.style.boxShadow = '0 2px 6px rgba(0,0,0,0.08)';
+      badge.style.zIndex = 1200;
+      badge.style.fontSize = '0.95rem';
+      container.appendChild(badge);
+    }
+
+    badge.innerHTML = '';
+
+    const txt = document.createElement('span');
+    txt.textContent = `Detected version: ${version}`;
+    txt.style.marginRight = '0.6rem';
+    badge.appendChild(txt);
+
+    const accept = document.createElement('button');
+    accept.textContent = 'Accept';
+    accept.style.marginRight = '0.4rem';
+    accept.addEventListener('click', () => {
+      try { document.getElementById('bible-version').value = version; } catch (e) {}
+      badge.remove();
+    });
+    badge.appendChild(accept);
+
+    const change = document.createElement('button');
+    change.textContent = 'Change';
+    change.addEventListener('click', () => {
+      try { document.getElementById('bible-version').focus(); } catch (e) {}
+    });
+    badge.appendChild(change);
+  } catch (e) {
+    console.warn('[detected-badge] error', e);
+  }
+}
 
 function updateSyncStatus(ok, msg) {
   const el = document.getElementById('syncStatus');
@@ -272,8 +322,17 @@ async function loadSemanticSearch(query, version) {
   document.getElementById('verse').innerHTML = '<em>Searching for similar verses...</em>';
   
   try {
-    // Make direct API call - no complexity
-    const response = await fetch(`/api/bible/semantic?query=${encodeURIComponent(query)}&version=${version}&limit=3`, {
+    // Make direct API call - prefer the provided `version` argument, otherwise use the UI selector; default to 'auto'
+    const thresholdControl = document.getElementById('similarity-threshold');
+    const thresh = thresholdControl && thresholdControl.value ? Number(thresholdControl.value) : null;
+    const thrParam = (thresh !== null && !Number.isNaN(thresh)) ? `&threshold=${encodeURIComponent(thresh)}` : '';
+
+    // Determine which version to send: prefer explicit function arg -> UI selector -> 'auto'
+    const uiVersionEl = document.getElementById('bible-version');
+    const versionToUse = (typeof version !== 'undefined' && version) ? version : (uiVersionEl ? uiVersionEl.value : 'auto');
+    const versionParam = encodeURIComponent(versionToUse || 'auto');
+
+    const response = await fetch(`/api/bible/semantic?query=${encodeURIComponent(query)}&version=${versionParam}&limit=3${thrParam}`, {
       method: 'POST'
     });
     
@@ -283,11 +342,21 @@ async function loadSemanticSearch(query, version) {
     
     const data = await response.json();
     console.log('[semantic] Response:', data);
+    // Capture any detected version so navigation (Next/Prev) uses the proper version
+    semanticDetectedVersion = data && data.version ? data.version : null;
+    if (semanticDetectedVersion) {
+      try { document.getElementById('bible-version').value = semanticDetectedVersion; } catch(e) {}
+      // Remember last query with the detected version for refresh/navigation
+      lastQuery = { query, version: semanticDetectedVersion };
+    }
     
     // Simple check - if we have results, show them
     if (data && data.found && data.results && data.results.length > 0) {
-      console.log('[semantic] Displaying', data.results.length, 'results');
-      displaySemanticResults(data.results, query);
+      console.log('[semantic] Displaying', data.results.length, 'results - detected version:', data.version);
+      // Capture and show detected version badge
+      semanticDetectedVersion = data.version || semanticDetectedVersion;
+      if (semanticDetectedVersion) showDetectedVersionBadge(semanticDetectedVersion);
+      displaySemanticResults(data.results, query, data.version);
     } else {
       console.log('[semantic] No results found');
       document.getElementById('reference').textContent = 'Semantic Search';
@@ -301,7 +370,7 @@ async function loadSemanticSearch(query, version) {
   }
 }
 
-function displaySemanticResults(results, query) {
+function displaySemanticResults(results, query, detectedVersion) {
   document.getElementById('reference').textContent = `Semantic Search: "${query}"`;
   
   const verseEl = document.getElementById('verse');
@@ -321,27 +390,80 @@ function displaySemanticResults(results, query) {
   results.forEach((result, index) => {
     const item = document.createElement('div');
     item.className = 'semantic-result-item';
-    
+    // Reference row with version badge
+    const header = document.createElement('div');
+    header.style.display = 'flex';
+    header.style.justifyContent = 'space-between';
+    header.style.alignItems = 'center';
+
     const ref = document.createElement('div');
     ref.className = 'reference';
     ref.textContent = result.reference;
+    ref.style.fontWeight = '600';
     
+    const meta = document.createElement('div');
+    meta.style.display = 'flex';
+    meta.style.alignItems = 'center';
+    meta.style.gap = '0.6rem';
+
+    const verBadge = document.createElement('span');
+    verBadge.className = 'version-badge';
+    verBadge.textContent = (detectedVersion || semanticDetectedVersion) ? (detectedVersion || semanticDetectedVersion).toUpperCase() : 'unknown';
+    verBadge.style.background = '#eef6ff';
+    verBadge.style.color = '#0656a6';
+    verBadge.style.padding = '0.15rem 0.4rem';
+    verBadge.style.borderRadius = '4px';
+    verBadge.style.fontSize = '0.85rem';
+
+    const sim = document.createElement('span');
+    sim.className = 'similarity';
+    sim.textContent = `Sim ${(result.similarity_score * 100).toFixed(1)}%`;
+    sim.style.opacity = '0.85';
+
+    meta.appendChild(verBadge);
+    meta.appendChild(sim);
+    header.appendChild(ref);
+    header.appendChild(meta);
+    item.appendChild(header);
+
     const text = document.createElement('div');
     text.className = 'text';
     text.textContent = result.text;
-    
-    const similarity = document.createElement('div');
-    similarity.className = 'similarity';
-    similarity.textContent = `Similarity: ${(result.similarity_score * 100).toFixed(1)}%`;
-    
-    item.appendChild(ref);
+    text.style.marginTop = '0.4rem';
     item.appendChild(text);
-    item.appendChild(similarity);
-    
-    // Add click handler to select this verse
-    item.addEventListener('click', () => {
+
+    // Action row
+    const actions = document.createElement('div');
+    actions.style.marginTop = '0.6rem';
+    actions.style.display = 'flex';
+    actions.style.gap = '0.5rem';
+
+    const useBtn = document.createElement('button');
+    useBtn.textContent = 'Use';
+    useBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // set detected version and select this verse
+      semanticDetectedVersion = detectedVersion || semanticDetectedVersion;
+      try { document.getElementById('bible-version').value = semanticDetectedVersion; } catch(e) {}
       selectSemanticResult(result);
     });
+
+    const previewBtn = document.createElement('button');
+    previewBtn.textContent = 'Preview';
+    previewBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // just show the verse in the pane without changing mode
+      document.getElementById('reference').textContent = result.reference;
+      document.getElementById('verse').textContent = result.text;
+      document.getElementById('verse').classList.remove('multi-verse');
+    });
+
+    actions.appendChild(useBtn);
+    actions.appendChild(previewBtn);
+    item.appendChild(actions);
+
+    // Click handler still selects the verse
+    item.addEventListener('click', () => selectSemanticResult(result));
     
     container.appendChild(item);
   });
@@ -361,6 +483,15 @@ async function selectSemanticResult(result) {
   document.getElementById('verse').textContent = result.text;
   document.getElementById('verse').classList.remove('multi-verse');
   
+  // If the semantic search detected a best version, set the UI version so nav uses it
+  if (semanticDetectedVersion) {
+    try { document.getElementById('bible-version').value = semanticDetectedVersion; } catch(e) {}
+    lastQuery = { query: result.reference, version: semanticDetectedVersion };
+  } else {
+    // Fallback: set lastQuery using currently selected version
+    try { lastQuery = { query: result.reference, version: document.getElementById('bible-version').value }; } catch(e) { lastQuery = { query: result.reference, version: 'kjv' }; }
+  }
+
   updateSyncStatus(true, 'synced');
 }
 
@@ -498,7 +629,27 @@ document.addEventListener('DOMContentLoaded', () => {
   updatePlaceholder();
   
   // Update placeholder when mode changes
-  searchModeSelect.addEventListener('change', updatePlaceholder);
+  searchModeSelect.addEventListener('change', (e) => {
+    // If switching to semantic, default the version selector to 'auto' but remember previous
+    const mode = e.target.value;
+    const versionEl = document.getElementById('bible-version');
+    if (mode === 'semantic') {
+      // Save previous version so we can restore when returning to reference mode
+      try {
+        if (!versionEl.dataset._prevVersion) versionEl.dataset._prevVersion = versionEl.value || '';
+        versionEl.value = 'auto';
+      } catch (e) {}
+    } else {
+      // restore previous version if present
+      try {
+        if (versionEl.dataset._prevVersion) {
+          versionEl.value = versionEl.dataset._prevVersion;
+          delete versionEl.dataset._prevVersion;
+        }
+      } catch (e) {}
+    }
+    updatePlaceholder();
+  });
 
   // Sync version selectors
   function syncVersions() {
@@ -695,6 +846,16 @@ document.addEventListener('DOMContentLoaded', () => {
     if (stored && perPageSelect) perPageSelect.value = stored;
     if (perPageSelect) perPageSelect.addEventListener('change', () => {
       localStorage.setItem('verses-per-page', perPageSelect.value);
+    });
+  } catch (e) {}
+
+  // Add similarity threshold control (persisted)
+  const thresholdControl = document.getElementById('similarity-threshold');
+  try {
+    const storedT = localStorage.getItem('similarity-threshold');
+    if (storedT && thresholdControl) thresholdControl.value = storedT;
+    if (thresholdControl) thresholdControl.addEventListener('change', () => {
+      localStorage.setItem('similarity-threshold', thresholdControl.value);
     });
   } catch (e) {}
 

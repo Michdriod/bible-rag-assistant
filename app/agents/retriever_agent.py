@@ -30,44 +30,50 @@ class BibleRetrieverAgent:
     def __init__(self):
         self.chunker = BibleChunker()
         self.embedding_service = get_embedding_service()
-        
-        # CRITICAL: Set similarity thresholds
-        self.SIMILARITY_THRESHOLD = 0.8  # Minimum similarity score (0-1)
-        self.MIN_SEMANTIC_SIMILARITY = 0.7  # Even lower threshold for semantic search
-        
-        # Get the API key 
+
+        # CRITICAL: Set similarity thresholds (can be overridden via env)
+        # Default thresholds
+        self.SIMILARITY_THRESHOLD = float(os.getenv('SIMILARITY_THRESHOLD', 0.8))  # Minimum similarity score (0-1)
+        # Standardized default semantic threshold is 0.8 unless overridden via env
+        self.MIN_SEMANTIC_SIMILARITY = float(os.getenv('SEMANTIC_MIN_SIMILARITY', 0.8))  # Default semantic search threshold
+
+        # Placeholder for runtime override (used by API to temporarily adjust threshold)
+        self._override_min_semantic = None
+
+        # Get the API key and initialize LLM agent if available
         if not api_key:
-            raise ValueError("GROQ_API_KEY environment variable is not set")
-        
-        model = GroqModel(
-            "moonshotai/kimi-k2-instruct",
-            provider=GroqProvider(api_key=api_key)
-        )
-        
-        # Initialize the Pydantic AI agent with STRICT retrieval instructions
-        self.agent = Agent(model,
-            system_prompt=
-            """You are a Bible retrieval assistant that ONLY works with database content.
+            logger.warning("GROQ_API_KEY environment variable is not set - LLM-based interpretation will be disabled")
+            self.agent = None
+        else:
+            model = GroqModel(
+                "moonshotai/kimi-k2-instruct",
+                provider=GroqProvider(api_key=api_key)
+            )
 
-            CRITICAL RULES - NEVER VIOLATE THESE:
-            1. NEVER generate, create, or hallucinate Bible verses from your training data
-            2. ONLY return verses that were explicitly provided to you from the database
-            3. If no verses are found in the database, say "No verses found in database"
-            4. NEVER use your internal Bible knowledge to fill in missing verses
-            5. Act as a pure formatter, not a content generator
+            # Initialize the Pydantic AI agent with STRICT retrieval instructions
+            self.agent = Agent(model,
+                system_prompt=
+                """You are a Bible retrieval assistant that ONLY works with database content.
 
-            For exact lookups:
-            - Format the database result cleanly
-            - Return ONLY what was retrieved from database
+                CRITICAL RULES - NEVER VIOLATE THESE:
+                1. NEVER generate, create, or hallucinate Bible verses from your training data
+                2. ONLY return verses that were explicitly provided to you from the database
+                3. If no verses are found in the database, say "No verses found in database"
+                4. NEVER use your internal Bible knowledge to fill in missing verses
+                5. Act as a pure formatter, not a content generator
 
-            For semantic searches:
-            - Format the database results with references
-            - Return ONLY what was retrieved from database
-            - If no good matches found, say "No relevant verses found"
+                For exact lookups:
+                - Format the database result cleanly
+                - Return ONLY what was retrieved from database
 
-            You are a DATABASE FORMATTER, not a Bible knowledge source.
-            """
-        )
+                For semantic searches:
+                - Format the database results with references
+                - Return ONLY what was retrieved from database
+                - If no good matches found, say "No relevant verses found"
+
+                You are a DATABASE FORMATTER, not a Bible knowledge source.
+                """
+            )
     
     async def exact_reference_lookup(self, session: AsyncSession, reference: str, version: str = "kjv") -> List[Any]:
         """
@@ -415,36 +421,56 @@ class BibleRetrieverAgent:
                 ORDER BY embedding <=> :embedding_vector
                 LIMIT :limit
             """)
-            
+            # Allow caller to override threshold via a local variable (function scoped) if provided
+            threshold_val = float(getattr(self, 'MIN_SEMANTIC_SIMILARITY', 0.7))
+            # If caller passed an override on the instance (set temporarily), use it
+            if hasattr(self, '_override_min_semantic') and self._override_min_semantic is not None:
+                try:
+                    threshold_val = float(self._override_min_semantic)
+                except Exception:
+                    pass
+
+            # Debug info
+            logger.debug("semantic_search - version=%s threshold=%s limit=%s", version, threshold_val, limit)
+            logger.debug("semantic_search - query='%s'", query_text)
+
             result = await session.execute(
                 sql_query,
                 {
                     "embedding_vector": embedding_str,
-                    "threshold": float(self.MIN_SEMANTIC_SIMILARITY),  # ensure float
+                    "threshold": float(threshold_val),  # ensure float
                     "limit": int(limit)
                 }
             )
             
             verses = []
             rows = result.fetchall()
-            
-            # ADDITIONAL VALIDATION: Double-check similarity scores
+            logger.debug("semantic_search - rows returned from SQL: %d", len(rows))
+
+            # Return dicts including similarity_score so callers can compare across versions
             for row in rows:
-                if row.similarity_score >= self.MIN_SEMANTIC_SIMILARITY:
-                    verse = VerseModel(
-                        book_id=row.book_id,
-                        book=row.book,
-                        chapter=row.chapter,
-                        verse=row.verse,
-                        text=row.text,
-                        reference=row.reference
-                    )
-                    verses.append(verse)
-            
+                try:
+                    sim = float(row.similarity_score)
+                except Exception:
+                    sim = 0.0
+                # Compare against the effective threshold used in the SQL query
+                logger.debug("semantic_search - row sim=%s ref=%s", sim, getattr(row, 'reference', None))
+                if sim >= float(threshold_val):
+                    verses.append({
+                        "book_id": row.book_id,
+                        "book": row.book,
+                        "chapter": row.chapter,
+                        "verse": row.verse,
+                        "text": row.text,
+                        "reference": row.reference,
+                        "similarity_score": sim
+                    })
+
             return verses
             
         except Exception as e:
-            logger.error("Error in semantic search: %s", str(e))
+            # Log full exception with stack trace to aid debugging (embedding, SQL, binding issues)
+            logger.exception("Error in semantic search")
             return []
     
     async def retrieve_verses(self, session: AsyncSession, user_input: str, version: str = "kjv") -> Dict[str, Any]:

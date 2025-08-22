@@ -132,18 +132,31 @@ async def search_bible(
             if verse is None:
                 continue
             # Use duck-typing: ensure the object has the expected attributes
-            if all(hasattr(verse, attr) for attr in ("reference", "book", "chapter", "verse", "text")):
-                try:
+            try:
+                if isinstance(verse, dict):
+                    ref = verse.get('reference')
+                    book = verse.get('book')
+                    chapter = verse.get('chapter')
+                    vnum = verse.get('verse')
+                    text = verse.get('text')
+                else:
+                    ref = getattr(verse, 'reference', None)
+                    book = getattr(verse, 'book', None)
+                    chapter = getattr(verse, 'chapter', None)
+                    vnum = getattr(verse, 'verse', None)
+                    text = getattr(verse, 'text', None)
+
+                if ref and book and chapter is not None and vnum is not None and text is not None:
                     verse_results.append(VerseResult(
-                        reference=getattr(verse, "reference"),
-                        book=getattr(verse, "book"),
-                        chapter=getattr(verse, "chapter"),
-                        verse=getattr(verse, "verse"),
-                        text=getattr(verse, "text")
+                        reference=ref,
+                        book=book,
+                        chapter=int(chapter),
+                        verse=int(vnum),
+                        text=text
                     ))
-                except Exception:
-                    # Skip any object we can't convert
-                    continue
+            except Exception:
+                # Skip any object we can't convert
+                continue
         
         # Create range information if applicable
         range_info = None
@@ -560,122 +573,78 @@ async def semantic_search(
     query: str = Query(..., description="Text to search for semantically"),
     version: str = Query("kjv", description="Bible version (kjv, niv, nkjv, nlt)"),
     limit: int = Query(3, ge=1, le=10, description="Maximum number of results"),
+    threshold: Optional[float] = Query(None, ge=0.0, le=1.0, description="Optional similarity threshold override (0-1)"),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Perform semantic search and return top results with similarity scores
     """
     try:
-        # Validate version
-        from db.models import VERSION_MODELS
-        if version.lower() not in VERSION_MODELS:
-            raise HTTPException(status_code=400, detail=f"Unknown Bible version: {version}")
-        
+        # Route semantic queries through the TaskRouterAgent which supports auto-detection
         print(f"Semantic search request: query='{query}', version='{version}', limit={limit}")
-        
-        # Try basic database query first to check if table exists and has data
+
+        # Use the TaskRouterAgent to perform semantic search (it handles 'auto')
         try:
-            # Get table name
-            table_name = version.lower()
-            basic_query = text(f"SELECT COUNT(*) as count FROM {table_name}")
-            result = await db.execute(basic_query)
-            row_count = result.fetchone()
-            print(f"Table {table_name} has {row_count.count if row_count else 0} rows")
-            
-            if not row_count or row_count.count == 0:
-                return SemanticSearchResponse(
-                    query=query,
-                    found=False,
-                    results=[],
-                    version=version
-                )
-            
-        except Exception as e:
-            print(f"Error checking table existence: {e}")
-            return SemanticSearchResponse(
-                query=query,
-                found=False,
-                results=[],
-                version=version
-            )
-        
-        # Try flexible word search
-        search_words = [word.strip().lower() for word in query.split() if len(word.strip()) > 2]
-        print(f"Search words: {search_words}")
-        
-        if not search_words:
-            return SemanticSearchResponse(
-                query=query,
-                found=False,
-                results=[],
-                version=version
-            )
-        
-        # Create a flexible search query with high similarity threshold
-        word_conditions = []
-        for word in search_words[:5]:  # Limit to first 5 words to avoid too complex queries
-            word_conditions.append(f"LOWER(text) LIKE '%{word}%'")
-        
-        if word_conditions:
-            # Only try exact phrase search for high similarity
-            # Require at least 90% similarity (0.9)
-            search_condition = f"LOWER(text) LIKE '%{query.lower()}%'"
-            
+            # If a threshold override was provided, set it on the retriever instance
+            if threshold is not None:
+                try:
+                    task_router.retriever_agent._override_min_semantic = float(threshold)
+                    print(f"Applied threshold override: {threshold}")
+                except Exception:
+                    pass
+
+            result = await task_router.route_query(db, query, version.lower())
+
+            # Clear any temporary override
             try:
-                search_query = text(f"""
-                    SELECT reference, book, chapter, verse, text,
-                           CASE 
-                               WHEN LOWER(text) LIKE '%{query.lower()}%' THEN 0.95
-                               ELSE 0.0
-                           END as similarity_score
-                    FROM {table_name}
-                    WHERE {search_condition}
-                    AND CASE 
-                        WHEN LOWER(text) LIKE '%{query.lower()}%' THEN 0.95
-                        ELSE 0.0
-                    END >= 0.9
-                    ORDER BY similarity_score DESC, reference
-                    LIMIT :limit
-                """)
-                
-                result = await db.execute(search_query, {"limit": limit})
-                rows = result.fetchall()
-                
-                print(f"High similarity search: Found {len(rows)} results with 90%+ similarity")
-                
-                if rows:
-                    semantic_results = []
-                    for row in rows:
-                        # Only include results with 90%+ similarity
-                        if row.similarity_score >= 0.9:
-                            semantic_results.append(SemanticResult(
-                                reference=row.reference,
-                                book=row.book,
-                                chapter=row.chapter,
-                                verse=row.verse,
-                                text=row.text,
-                                similarity_score=float(row.similarity_score)
-                            ))
-                    
-                    if semantic_results:
-                        print(f"Returning {len(semantic_results)} high-similarity results")
-                        return SemanticSearchResponse(
-                            query=query,
-                            found=True,
-                            results=semantic_results,
-                            version=version
-                        )
-                        
-            except Exception as e:
-                print(f"High similarity search failed: {e}")
-                # Don't fall back to lower similarity searches
-        
-        print("No results found with any search method")
+                task_router.retriever_agent._override_min_semantic = None
+                if threshold is not None:
+                    print(f"Cleared threshold override after routing: {threshold}")
+            except Exception:
+                pass
+
+        except Exception as e:
+            print(f"Semantic routing failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Semantic routing failed: {str(e)}")
+
+        # Expect result to be a dict with 'results' and 'version'
+        results = []
+        if result.get('results'):
+            for r in result.get('results')[:limit]:
+                try:
+                    # r may be a dict with similarity_score or a DB object
+                    if isinstance(r, dict):
+                        sim = float(r.get('similarity_score') or 0.0)
+                        ref = r.get('reference')
+                        book = r.get('book')
+                        chapter = int(r.get('chapter')) if r.get('chapter') is not None else 0
+                        verse = int(r.get('verse')) if r.get('verse') is not None else 0
+                        text = r.get('text')
+                    else:
+                        sim = float(getattr(r, 'similarity_score', 0.0) or 0.0)
+                        ref = getattr(r, 'reference', None)
+                        book = getattr(r, 'book', None)
+                        chapter = int(getattr(r, 'chapter', 0) or 0)
+                        verse = int(getattr(r, 'verse', 0) or 0)
+                        text = getattr(r, 'text', None)
+
+                    if ref and text:
+                        results.append(SemanticResult(
+                            reference=ref,
+                            book=book,
+                            chapter=chapter,
+                            verse=verse,
+                            text=text,
+                            similarity_score=sim
+                        ))
+                except Exception:
+                    continue
+
         return SemanticSearchResponse(
-            query=query,
-            found=False,
-            results=[],
-            version=version
+            query=result.get('query', query),
+            found=bool(results),
+            results=results,
+            version=result.get('version', version.lower())
         )
         
     except HTTPException:

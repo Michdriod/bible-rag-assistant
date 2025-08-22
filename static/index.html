@@ -241,12 +241,14 @@
   
   <div class="stage">
     <div class="search-controls">
-      <select id="bible-version">
+      <select id="bible-version" aria-label="Bible version">
+        <option value="auto">Auto</option>
         <option value="kjv">KJV</option>
         <option value="niv">NIV</option>
         <option value="nkjv">NKJV</option>
         <option value="nlt">NLT</option>
       </select>
+      <span id="version-tooltip" title="When Auto is selected, semantic searches will try to detect the best Bible version automatically. You can accept the detected version when results appear.">ⓘ</span>
       <input id="search-input" type="text" placeholder="Enter reference (e.g. John 3:16) or search text" />
       <label for="search-mode" style="display:inline-flex;align-items:center;gap:.4rem;color:rgba(255,255,255,0.85);font-size:0.95rem;">
         Mode
@@ -263,6 +265,10 @@
           <option value="6">6</option>
           <option value="10">10</option>
         </select>
+      </label>
+      <label for="similarity-threshold" style="display:inline-flex;align-items:center;gap:.4rem;color:rgba(255,255,255,0.85);font-size:0.95rem;">
+        Min sim
+        <input id="similarity-threshold" type="number" step="0.01" min="0" max="1" value="0.7" style="width:80px;font-size:0.95rem;padding:.4rem;border-radius:.3rem;background:rgba(255,255,255,0.06);color:#fff;border:1px solid rgba(255,255,255,0.06);" />
       </label>
       <button id="search-btn">Show</button>
     </div>
